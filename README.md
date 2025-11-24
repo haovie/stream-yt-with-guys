@@ -163,6 +163,55 @@ Có thể mở rộng với:
 
 MIT License - Tự do sử dụng và chỉnh sửa.
 
+## 🚀 Deployment
+
+### Deploy lên DigitalOcean
+
+#### Quick Start (5 phút):
+```bash
+# 1. Push code lên GitHub
+git push origin main
+
+# 2. Deploy với script
+./deploy.sh app-platform
+
+# Hoặc qua Dashboard:
+# https://cloud.digitalocean.com/apps/new
+```
+
+#### Hướng dẫn chi tiết:
+- 📖 [Quick Start Guide](QUICKSTART_DEPLOY.md) - Deploy trong 5 phút
+- 📚 [Full Deployment Guide](DEPLOYMENT.md) - Hướng dẫn đầy đủ 3 phương pháp
+
+#### Chi phí ước tính:
+- **App Platform**: $5/tháng (Khuyên dùng)
+- **Droplet**: $6/tháng
+- **Free Trial**: $200 credit cho 60 ngày
+
+### Deploy với Docker
+
+```bash
+# Local
+docker-compose up -d --build
+
+# Production
+# Xem DEPLOYMENT.md
+```
+
+## 🔧 Environment Variables
+
+```bash
+NODE_ENV=production    # Môi trường (development/production)
+PORT=3000             # Port ứng dụng chạy
+```
+
+## 🌐 Domain Configuration
+
+Sau khi deploy, bạn có thể:
+- Sử dụng domain mặc định: `https://your-app.ondigitalocean.app`
+- Thêm custom domain trong App Settings
+- SSL certificate tự động được cấp
+
 ## Đóng góp
 
 Mọi đóng góp và cải thiện đều được chào đón! Hãy tạo issue hoặc pull request.
