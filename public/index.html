@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Stream Chat - Xem video và chat cùng nhau</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1><i class="fab fa-youtube"></i> YouTube Stream Chat</h1>
+            <div class="user-info">
+                <span id="user-count">0 người online</span>
+                <span id="current-user"></span>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Video Section -->
+            <div class="video-section">
+                <div class="video-controls">
+                    <div class="url-input-group">
+                        <input type="text" id="youtube-url" placeholder="Dán link YouTube vào đây..." />
+                        <button id="load-video-btn">
+                            <i class="fas fa-play"></i> <span id="load-video-text">Phát Video</span>
+                        </button>
+                    </div>
+                    
+                    <!-- Admin Controls -->
+                    <div id="admin-controls" class="admin-controls hidden">
+                        <button id="toggle-live-mode" class="admin-btn">
+                            <i class="fas fa-broadcast-tower"></i> <span id="live-mode-text">Bật Live Mode</span>
+                        </button>
+                        <button id="show-queue-btn" class="admin-btn">
+                            <i class="fas fa-list"></i> Hàng đợi (<span id="queue-count">0</span>)
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="video-container">
+                    <div id="youtube-player"></div>
+                    <div id="video-placeholder" class="video-placeholder">
+                        <i class="fab fa-youtube"></i>
+                        <p>Dán link YouTube để bắt đầu xem cùng nhau!</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Section -->
+            <div class="chat-section">
+                <div class="chat-header">
+                    <h3><i class="fas fa-comments"></i> Chat Room</h3>
+                    <div class="chat-controls">
+                        <button id="users-list-btn" title="Danh sách người dùng">
+                            <i class="fas fa-users"></i>
+                        </button>
+                        <span id="room-id-display"></span>
+                    </div>
+                </div>
+                
+                <div class="chat-messages" id="chat-messages">
+                    <div class="welcome-message">
+                        <p>Chào mừng đến với phòng chat! Hãy bắt đầu trò chuyện...</p>
+                    </div>
+                </div>
+                
+                <div class="chat-input-container">
+                    <div class="chat-input-group">
+                        <button id="file-btn" class="input-action-btn" title="Chia sẻ file">
+                            <i class="fas fa-paperclip"></i>
+                        </button>
+                        <button id="emoji-btn" class="input-action-btn" title="Emoji">
+                            <i class="fas fa-smile"></i>
+                        </button>
+                        <input type="text" id="chat-input" placeholder="Nhập tin nhắn..." maxlength="500" />
+                        <button id="send-btn">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                    
+                    <!-- Emoji Picker -->
+                    <div id="emoji-picker" class="emoji-picker hidden">
+                        <div class="emoji-categories">
+                            <button class="emoji-category active" data-category="smileys">😀</button>
+                            <button class="emoji-category" data-category="people">👋</button>
+                            <button class="emoji-category" data-category="nature">🌸</button>
+                            <button class="emoji-category" data-category="food">🍕</button>
+                            <button class="emoji-category" data-category="activities">⚽</button>
+                            <button class="emoji-category" data-category="travel">🚗</button>
+                            <button class="emoji-category" data-category="objects">💡</button>
+                            <button class="emoji-category" data-category="symbols">❤️</button>
+                        </div>
+                        <div class="emoji-grid" id="emoji-grid">
+                            <!-- Emojis will be populated by JavaScript -->
+                        </div>
+                    </div>
+                    
+                    <!-- File Upload -->
+                    <input type="file" id="file-input" class="hidden" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt" />
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Join Room Modal -->
+    <div id="join-modal" class="modal">
+        <div class="modal-content">
+            <h2>Tham gia phòng</h2>
+            <form id="join-form">
+                <div class="form-group">
+                    <label for="username">Tên của bạn:</label>
+                    <input type="text" id="username" required maxlength="20" placeholder="Nhập tên hiển thị..." />
+                </div>
+                <div class="form-group">
+                    <label for="room-id">ID Phòng:</label>
+                    <input type="text" id="room-id" placeholder="Để trống để tạo phòng mới..." maxlength="20" />
+                    <small>Hoặc để trống để tạo phòng mới</small>
+                </div>
+                <div class="form-group">
+                    <label for="admin-password">Mật khẩu Admin (tùy chọn):</label>
+                    <input type="password" id="admin-password" placeholder="Nhập để trở thành admin..." maxlength="50" />
+                    <small>Để trống nếu tham gia với tư cách người dùng thường</small>
+                </div>
+                <button type="submit">
+                    <i class="fas fa-sign-in-alt"></i> Tham gia
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Users List Modal -->
+    <div id="users-modal" class="modal hidden">
+        <div class="modal-content users-modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-users"></i> Người dùng online</h3>
+                <button id="close-users-modal" class="close-btn">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="users-list" id="users-list">
+                <!-- Users will be populated by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Private Message Modal -->
+    <div id="private-message-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-envelope"></i> Tin nhắn riêng</h3>
+                <button id="close-pm-modal" class="close-btn">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="private-messages" id="private-messages">
+                <!-- Private messages will be populated by JavaScript -->
+            </div>
+            <div class="pm-input-group">
+                <input type="text" id="pm-input" placeholder="Nhập tin nhắn riêng..." maxlength="500" />
+                <button id="send-pm-btn">
+                    <i class="fas fa-paper-plane"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- File Preview Modal -->
+    <div id="file-preview-modal" class="modal hidden">
+        <div class="modal-content file-preview-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-file"></i> Xem trước file</h3>
+                <button id="close-file-modal" class="close-btn">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="file-preview" id="file-preview">
+                <!-- File preview will be populated by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Video Queue Modal -->
+    <div id="queue-modal" class="modal hidden">
+        <div class="modal-content queue-modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-list"></i> Hàng đợi video</h3>
+                <button id="close-queue-modal" class="close-btn">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="queue-list" id="queue-list">
+                <div class="queue-empty">
+                    <p>Hàng đợi trống</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loading" class="loading hidden">
+        <div class="spinner"></div>
+        <p>Đang kết nối...</p>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://www.youtube.com/iframe_api"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
