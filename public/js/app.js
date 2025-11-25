@@ -41,6 +41,44 @@ const roomIdDisplay = document.getElementById('room-id-display');
 const videoPlaceholder = document.getElementById('video-placeholder');
 const loading = document.getElementById('loading');
 
+// 🔥 Chat Overlay Elements
+const videoContainer = document.getElementById('video-container');
+const chatOverlay = document.getElementById('chat-overlay');
+const chatOverlayMessages = document.getElementById('chat-overlay-messages');
+const chatOverlayInput = document.getElementById('chat-overlay-input');
+const chatOverlaySendBtn = document.getElementById('chat-overlay-send');
+const newMessageIndicator = document.getElementById('new-message-indicator');
+const chatOverlayToggle = document.getElementById('chat-overlay-toggle');
+const chatBadge = document.getElementById('chat-badge');
+
+// 🔥 Chat Overlay State (TikTok Style)
+let isUserScrolling = false;
+let scrollTimeout = null;
+let newMessagesPending = 0;
+let isChatCollapsed = false;
+let unreadMessages = 0;
+
+// 🎮 Custom Video Controls Elements
+const customControls = document.getElementById('custom-controls');
+const videoClickOverlay = document.getElementById('video-click-overlay');
+const playPauseBtn = document.getElementById('play-pause-btn');
+const rewindBtn = document.getElementById('rewind-btn');
+const forwardBtn = document.getElementById('forward-btn');
+const volumeBtn = document.getElementById('volume-btn');
+const volumeSlider = document.getElementById('volume-slider');
+const fullscreenBtn = document.getElementById('fullscreen-btn');
+const progressBar = document.getElementById('progress-bar');
+const progressFilled = document.getElementById('progress-filled');
+const progressHandle = document.getElementById('progress-handle');
+const currentTimeDisplay = document.getElementById('current-time');
+const durationDisplay = document.getElementById('duration');
+const videoTitle = document.getElementById('video-title');
+
+// Custom controls state
+let controlsTimeout = null;
+let isSeeking = false;
+let lastVolume = 100;
+
 // New elements for enhanced features
 const emojiBtn = document.getElementById('emoji-btn');
 const emojiPicker = document.getElementById('emoji-picker');
@@ -97,6 +135,75 @@ function setupEventListeners() {
             handleLoadVideo();
         }
     });
+    
+    // 🔥 Chat overlay event listeners
+    if (chatOverlayInput) {
+        chatOverlayInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendOverlayMessage();
+            }
+        });
+    }
+    
+    if (chatOverlaySendBtn) {
+        chatOverlaySendBtn.addEventListener('click', sendOverlayMessage);
+    }
+    
+    // 🎯 TikTok Style: Scroll detection for auto-scroll logic
+    if (chatOverlayMessages) {
+        chatOverlayMessages.addEventListener('scroll', handleOverlayScroll);
+    }
+    
+    // 🎯 New Message Indicator click -> Scroll to bottom
+    if (newMessageIndicator) {
+        newMessageIndicator.addEventListener('click', function() {
+            scrollToBottom(chatOverlayMessages);
+            hideNewMessageIndicator();
+            isUserScrolling = false;
+        });
+    }
+    
+    // 🎯 Chat Overlay Toggle button
+    if (chatOverlayToggle) {
+        chatOverlayToggle.addEventListener('click', toggleChatOverlay);
+    }
+    
+    // 🔥 Fullscreen change detection
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+    
+    function handleFullscreenChange() {
+        const inFullscreen = isFullscreen();
+        toggleChatOverlay(inFullscreen);
+        
+        if (inFullscreen) {
+            // ✅ FIX: Initialize scroll state properly when entering fullscreen
+            setTimeout(() => {
+                if (chatOverlayMessages) {
+                    scrollToBottom(chatOverlayMessages);
+                    isUserScrolling = false;
+                    newMessagesPending = 0;
+                    hideNewMessageIndicator();
+                    
+                    // Set initial state to idle
+                    chatOverlayMessages.classList.remove('scrolling');
+                    chatOverlayMessages.classList.add('idle');
+                }
+                
+                // Focus overlay input when entering fullscreen
+                if (chatOverlayInput) {
+                    chatOverlayInput.focus();
+                }
+            }, 300);
+        } else {
+            // Reset state when exiting fullscreen
+            isUserScrolling = false;
+            isChatCollapsed = false;
+            unreadMessages = 0;
+        }
+    }
 
     // New feature listeners
     emojiBtn.addEventListener('click', toggleEmojiPicker);
@@ -191,15 +298,31 @@ function setupSocketListeners() {
     // Chat messages
     socket.on('chat-message', (data) => {
         displayMessage(data);
+        // 🔥 Also display in overlay if in fullscreen
+        displayOverlayMessage(data);
     });
     
     // User joined/left
     socket.on('user-joined', (data) => {
         displaySystemMessage(data.message);
+        // 🔥 Also display in overlay
+        displayOverlayMessage({
+            username: 'Hệ thống',
+            message: data.message,
+            isSystem: true,
+            timestamp: new Date().toLocaleTimeString('vi-VN')
+        });
     });
     
     socket.on('user-left', (data) => {
         displaySystemMessage(data.message);
+        // 🔥 Also display in overlay
+        displayOverlayMessage({
+            username: 'Hệ thống',
+            message: data.message,
+            isSystem: true,
+            timestamp: new Date().toLocaleTimeString('vi-VN')
+        });
     });
     
     // User count and list
@@ -341,6 +464,214 @@ function displaySystemMessage(message) {
     });
 }
 
+// 🔥 Display message in fullscreen overlay (TikTok/Facebook Live style)
+function displayOverlayMessage(data) {
+    // Skip if data is invalid or overlay doesn't exist
+    if (!data || !chatOverlayMessages) return;
+    
+    // Skip file messages in overlay (too complex for overlay display)
+    if (data.messageType === 'file') return;
+    
+    const messageDiv = document.createElement('div');
+    let messageClass = 'chat-overlay-message';
+    
+    if (data.isSystem) {
+        messageClass += ' system';
+    } else if (data.username === currentUser && !data.isSystem) {
+        messageClass += ' own';
+    }
+    
+    messageDiv.className = messageClass;
+    
+    // Create message content
+    if (data.isSystem) {
+        messageDiv.innerHTML = `
+            <span class="chat-overlay-message-content">${escapeHtml(data.message)}</span>
+        `;
+    } else {
+        messageDiv.innerHTML = `
+            <span class="chat-overlay-message-username">${escapeHtml(data.username)}:</span>
+            <span class="chat-overlay-message-content">${escapeHtml(data.message)}</span>
+        `;
+    }
+    
+    // Add to overlay
+    chatOverlayMessages.appendChild(messageDiv);
+    
+    // 🎯 Handle unread messages when chat is collapsed
+    if (isChatCollapsed) {
+        unreadMessages++;
+        updateChatBadge();
+    } else {
+        // 🎯 TikTok Style: Auto-scroll logic
+        if (!isUserScrolling) {
+            // User is at bottom or idle -> Auto-scroll to new message
+            scrollToBottom(chatOverlayMessages);
+        } else {
+            // User is scrolling up viewing history -> Show "New Message" indicator
+            newMessagesPending++;
+            showNewMessageIndicator();
+        }
+    }
+    
+    // Keep only last 50 messages (increased from 20 for better history)
+    const messages = chatOverlayMessages.querySelectorAll('.chat-overlay-message');
+    if (messages.length > 50) {
+        messages[0].remove();
+    }
+    
+    // ❌ TikTok Style: NO auto-fade - messages stay until scrolled away
+    // Users can scroll up to read history at any time
+}
+
+// 🎯 Scroll to bottom smoothly
+function scrollToBottom(element) {
+    if (!element) return;
+    element.scrollTo({
+        top: element.scrollHeight,
+        behavior: 'smooth'
+    });
+}
+
+// 🎯 Check if user is at bottom of chat
+function isAtBottom(element) {
+    if (!element) return true;
+    const threshold = 50; // 50px threshold
+    return element.scrollHeight - element.scrollTop - element.clientHeight <= threshold;
+}
+
+// 🎯 Show "New Message" indicator (Facebook Live style)
+function showNewMessageIndicator() {
+    if (!newMessageIndicator) return;
+    
+    // Update text with count
+    const countText = newMessagesPending > 1 ? `${newMessagesPending} tin nhắn mới` : 'Tin nhắn mới';
+    newMessageIndicator.querySelector('span').textContent = countText;
+    
+    // Show indicator
+    newMessageIndicator.classList.add('visible');
+}
+
+// 🎯 Hide "New Message" indicator
+function hideNewMessageIndicator() {
+    if (!newMessageIndicator) return;
+    
+    newMessageIndicator.classList.remove('visible');
+    newMessagesPending = 0;
+}
+
+// 🎯 Handle scroll event (detect user scrolling)
+function handleOverlayScroll() {
+    if (!chatOverlayMessages) return;
+    
+    // Clear existing timeout
+    if (scrollTimeout) {
+        clearTimeout(scrollTimeout);
+    }
+    
+    // Check if user is at bottom
+    if (isAtBottom(chatOverlayMessages)) {
+        // User scrolled to bottom
+        isUserScrolling = false;
+        chatOverlayMessages.classList.remove('scrolling');
+        chatOverlayMessages.classList.add('idle');
+        hideNewMessageIndicator();
+    } else {
+        // User is scrolling up (viewing history)
+        isUserScrolling = true;
+        chatOverlayMessages.classList.remove('idle');
+        chatOverlayMessages.classList.add('scrolling');
+    }
+    
+    // Reset to idle after 2 seconds of no scrolling (if at bottom)
+    scrollTimeout = setTimeout(() => {
+        if (isAtBottom(chatOverlayMessages)) {
+            isUserScrolling = false;
+            chatOverlayMessages.classList.remove('scrolling');
+            chatOverlayMessages.classList.add('idle');
+        }
+    }, 2000);
+}
+
+// 🎯 Toggle chat visibility
+function toggleChatOverlay() {
+    if (!chatOverlay) return;
+    
+    isChatCollapsed = !isChatCollapsed;
+    
+    if (isChatCollapsed) {
+        // Collapse chat
+        chatOverlay.classList.add('collapsed');
+        if (chatOverlayToggle) {
+            const icon = chatOverlayToggle.querySelector('i');
+            if (icon) icon.className = 'fas fa-comment-slash';
+        }
+    } else {
+        // Expand chat
+        chatOverlay.classList.remove('collapsed');
+        if (chatOverlayToggle) {
+            const icon = chatOverlayToggle.querySelector('i');
+            if (icon) icon.className = 'fas fa-comment';
+        }
+        
+        // Clear unread count and scroll to bottom
+        unreadMessages = 0;
+        updateChatBadge();
+        
+        // Scroll to bottom after expanding
+        setTimeout(() => {
+            scrollToBottom(chatOverlayMessages);
+            isUserScrolling = false;
+        }, 100);
+    }
+}
+
+// 🎯 Update chat badge (unread count)
+function updateChatBadge() {
+    if (!chatBadge) return;
+    
+    if (unreadMessages > 0) {
+        chatBadge.style.display = 'flex';
+        chatBadge.textContent = unreadMessages > 99 ? '99+' : unreadMessages;
+    } else {
+        chatBadge.style.display = 'none';
+    }
+}
+
+// 🔥 Send message from overlay input
+function sendOverlayMessage() {
+    const message = chatOverlayInput.value.trim();
+    if (!message || !socket) return;
+    
+    socket.emit('chat-message', {
+        message: message,
+        roomId: currentRoom
+    });
+    
+    chatOverlayInput.value = '';
+}
+
+// 🔥 Toggle chat overlay visibility in fullscreen
+function toggleChatOverlay(show) {
+    if (!chatOverlay) return;
+    
+    if (show) {
+        chatOverlay.classList.remove('hidden');
+    } else {
+        chatOverlay.classList.add('hidden');
+    }
+}
+
+// 🔥 Check if video is in fullscreen
+function isFullscreen() {
+    return !!(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement ||
+        document.msFullscreenElement
+    );
+}
+
 // Send chat message
 function sendMessage() {
     const message = chatInput.value.trim();
@@ -399,6 +730,362 @@ function onYouTubeIframeAPIReady() {
     console.log('YouTube API sẵn sàng!');
 }
 
+// 🎮 Initialize Custom Controls
+function initializeCustomControls() {
+    if (!customControls) return;
+    
+    // Play/Pause button
+    if (playPauseBtn) playPauseBtn.addEventListener('click', togglePlayPause);
+    
+    // Rewind/Forward buttons
+    if (rewindBtn) rewindBtn.addEventListener('click', () => seekRelative(-10));
+    if (forwardBtn) forwardBtn.addEventListener('click', () => seekRelative(10));
+    
+    // Volume controls
+    if (volumeBtn) volumeBtn.addEventListener('click', toggleMute);
+    if (volumeSlider) volumeSlider.addEventListener('input', handleVolumeChange);
+    
+    // Fullscreen button
+    if (fullscreenBtn) fullscreenBtn.addEventListener('click', toggleFullscreen);
+    
+    // Progress bar seeking
+    if (progressBar) {
+        progressBar.addEventListener('mousedown', startSeeking);
+        progressBar.addEventListener('click', handleProgressClick);
+    }
+    
+    // Video click overlay (click anywhere to play/pause)
+    if (videoClickOverlay) videoClickOverlay.addEventListener('click', handleVideoClick);
+    
+    // Mouse movement detection for auto-hide controls
+    if (videoContainer) {
+        videoContainer.addEventListener('mousemove', showControlsTemporarily);
+        videoContainer.addEventListener('mouseleave', hideControls);
+    }
+    
+    // Keyboard shortcuts
+    document.addEventListener('keydown', handleKeyboardShortcuts);
+    
+    // Update progress bar continuously
+    setInterval(updateProgressBar, 100);
+    
+    // Update fullscreen button on fullscreen change
+    document.addEventListener('fullscreenchange', updateFullscreenButton);
+    document.addEventListener('webkitfullscreenchange', updateFullscreenButton);
+    document.addEventListener('mozfullscreenchange', updateFullscreenButton);
+    document.addEventListener('MSFullscreenChange', updateFullscreenButton);
+    
+    console.log('✅ Custom controls initialized');
+}
+
+// 🎮 Toggle Play/Pause
+function togglePlayPause() {
+    if (!player || !isPlayerReady) return;
+    
+    const state = player.getPlayerState();
+    if (state === YT.PlayerState.PLAYING) {
+        player.pauseVideo();
+    } else {
+        player.playVideo();
+    }
+    
+    updatePlayPauseButton();
+}
+
+// 🎮 Update Play/Pause button icon
+function updatePlayPauseButton() {
+    if (!player || !isPlayerReady || !playPauseBtn) return;
+    
+    const state = player.getPlayerState();
+    const icon = playPauseBtn.querySelector('i');
+    
+    if (icon) {
+        if (state === YT.PlayerState.PLAYING) {
+            icon.className = 'fas fa-pause';
+        } else {
+            icon.className = 'fas fa-play';
+        }
+    }
+}
+
+// 🎮 Seek relative (forward/backward)
+function seekRelative(seconds) {
+    if (!player || !isPlayerReady) return;
+    
+    const currentTime = player.getCurrentTime();
+    const duration = player.getDuration();
+    const newTime = Math.max(0, Math.min(duration, currentTime + seconds));
+    
+    player.seekTo(newTime, true);
+}
+
+// 🎮 Toggle Mute
+function toggleMute() {
+    if (!player || !isPlayerReady) return;
+    
+    if (player.isMuted()) {
+        player.unMute();
+        player.setVolume(lastVolume);
+        updateVolumeIcon(lastVolume);
+        if (volumeSlider) volumeSlider.value = lastVolume;
+    } else {
+        lastVolume = player.getVolume();
+        player.mute();
+        updateVolumeIcon(0);
+        if (volumeSlider) volumeSlider.value = 0;
+    }
+}
+
+// 🎮 Handle volume change
+function handleVolumeChange(e) {
+    if (!player || !isPlayerReady) return;
+    
+    const volume = parseInt(e.target.value);
+    player.setVolume(volume);
+    
+    if (volume === 0) {
+        player.mute();
+    } else {
+        player.unMute();
+        lastVolume = volume;
+    }
+    
+    updateVolumeIcon(volume);
+}
+
+// 🎮 Update volume icon
+function updateVolumeIcon(volume) {
+    if (!volumeBtn) return;
+    
+    const icon = volumeBtn.querySelector('i');
+    
+    if (icon) {
+        if (volume === 0) {
+            icon.className = 'fas fa-volume-mute';
+        } else if (volume < 50) {
+            icon.className = 'fas fa-volume-down';
+        } else {
+            icon.className = 'fas fa-volume-up';
+        }
+    }
+}
+
+// 🎮 Toggle Fullscreen (KEY FIX: Request fullscreen on WRAPPER, not iframe)
+function toggleFullscreen() {
+    if (!videoContainer) return;
+    
+    if (!isFullscreen()) {
+        // Request fullscreen on WRAPPER div (contains video + overlay + controls)
+        if (videoContainer.requestFullscreen) {
+            videoContainer.requestFullscreen();
+        } else if (videoContainer.webkitRequestFullscreen) {
+            videoContainer.webkitRequestFullscreen();
+        } else if (videoContainer.mozRequestFullScreen) {
+            videoContainer.mozRequestFullScreen();
+        } else if (videoContainer.msRequestFullscreen) {
+            videoContainer.msRequestFullscreen();
+        }
+    } else {
+        // Exit fullscreen
+        if (document.exitFullscreen) {
+            document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+            document.webkitExitFullscreen();
+        } else if (document.mozCancelFullScreen) {
+            document.mozCancelFullScreen();
+        } else if (document.msExitFullscreen) {
+            document.msExitFullscreen();
+        }
+    }
+}
+
+// 🎮 Update fullscreen button icon
+function updateFullscreenButton() {
+    if (!fullscreenBtn) return;
+    
+    const icon = fullscreenBtn.querySelector('i');
+    
+    if (icon) {
+        if (isFullscreen()) {
+            icon.className = 'fas fa-compress';
+        } else {
+            icon.className = 'fas fa-expand';
+        }
+    }
+}
+
+// 🎮 Start seeking (mousedown on progress bar)
+function startSeeking(e) {
+    isSeeking = true;
+    handleProgressClick(e);
+    
+    document.addEventListener('mousemove', handleSeeking);
+    document.addEventListener('mouseup', stopSeeking);
+}
+
+// 🎮 Handle seeking (mousemove)
+function handleSeeking(e) {
+    if (!isSeeking) return;
+    handleProgressClick(e);
+}
+
+// 🎮 Stop seeking (mouseup)
+function stopSeeking() {
+    isSeeking = false;
+    document.removeEventListener('mousemove', handleSeeking);
+    document.removeEventListener('mouseup', stopSeeking);
+}
+
+// 🎮 Handle progress bar click
+function handleProgressClick(e) {
+    if (!player || !isPlayerReady || !progressBar) return;
+    
+    const rect = progressBar.getBoundingClientRect();
+    const pos = (e.clientX - rect.left) / rect.width;
+    const duration = player.getDuration();
+    const newTime = pos * duration;
+    
+    player.seekTo(newTime, true);
+    updateProgressBar();
+}
+
+// 🎮 Update progress bar
+function updateProgressBar() {
+    if (!player || !isPlayerReady || !progressFilled || !progressHandle) return;
+    
+    try {
+        const currentTime = player.getCurrentTime();
+        const duration = player.getDuration();
+        
+        if (duration > 0) {
+            const percentage = (currentTime / duration) * 100;
+            progressFilled.style.width = percentage + '%';
+            progressHandle.style.left = percentage + '%';
+            
+            // Update time displays
+            if (currentTimeDisplay) currentTimeDisplay.textContent = formatTime(currentTime);
+            if (durationDisplay) durationDisplay.textContent = formatTime(duration);
+        }
+    } catch (error) {
+        // Ignore errors when player is not ready
+    }
+    
+    // Update play/pause button
+    updatePlayPauseButton();
+}
+
+// 🎮 Format time (seconds to MM:SS)
+function formatTime(seconds) {
+    if (!seconds || isNaN(seconds)) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+}
+
+// 🎮 Handle video click (click anywhere on video to play/pause)
+function handleVideoClick(e) {
+    e.stopPropagation();
+    togglePlayPause();
+    
+    // Show click animation
+    if (videoClickOverlay) {
+        videoClickOverlay.classList.add('clicked');
+        setTimeout(() => {
+            videoClickOverlay.classList.remove('clicked');
+        }, 300);
+    }
+}
+
+// 🎮 Show controls temporarily (on mouse move)
+function showControlsTemporarily() {
+    if (!customControls) return;
+    
+    customControls.classList.add('visible');
+    if (videoContainer) {
+        videoContainer.classList.add('controls-visible');
+        videoContainer.classList.remove('controls-hidden');
+    }
+    
+    // Clear existing timeout
+    if (controlsTimeout) {
+        clearTimeout(controlsTimeout);
+    }
+    
+    // Auto-hide after 3 seconds of inactivity (only in fullscreen)
+    controlsTimeout = setTimeout(() => {
+        if (!isFullscreen()) return;
+        hideControls();
+    }, 3000);
+}
+
+// 🎮 Hide controls
+function hideControls() {
+    if (!customControls) return;
+    
+    customControls.classList.remove('visible');
+    if (videoContainer) {
+        videoContainer.classList.add('controls-hidden');
+        videoContainer.classList.remove('controls-visible');
+    }
+}
+
+// 🎮 Keyboard shortcuts
+function handleKeyboardShortcuts(e) {
+    // Don't trigger if typing in input fields
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    
+    if (!player || !isPlayerReady) return;
+    
+    switch(e.key.toLowerCase()) {
+        case ' ':
+        case 'k':
+            e.preventDefault();
+            togglePlayPause();
+            break;
+        case 'arrowleft':
+            e.preventDefault();
+            seekRelative(-10);
+            break;
+        case 'arrowright':
+            e.preventDefault();
+            seekRelative(10);
+            break;
+        case 'm':
+            e.preventDefault();
+            toggleMute();
+            break;
+        case 'f':
+            e.preventDefault();
+            toggleFullscreen();
+            break;
+        case 'arrowup':
+            e.preventDefault();
+            adjustVolume(10);
+            break;
+        case 'arrowdown':
+            e.preventDefault();
+            adjustVolume(-10);
+            break;
+    }
+}
+
+// 🎮 Adjust volume by amount
+function adjustVolume(amount) {
+    if (!player || !isPlayerReady) return;
+    
+    const currentVolume = player.getVolume();
+    const newVolume = Math.max(0, Math.min(100, currentVolume + amount));
+    
+    player.setVolume(newVolume);
+    if (volumeSlider) volumeSlider.value = newVolume;
+    updateVolumeIcon(newVolume);
+    
+    if (newVolume > 0) {
+        player.unMute();
+        lastVolume = newVolume;
+    }
+}
+
 // Load YouTube video
 function loadYouTubeVideo(videoId) {
     if (!videoId) return;
@@ -418,12 +1105,12 @@ function loadYouTubeVideo(videoId) {
             videoId: videoId,
             playerVars: {
                 'autoplay': 0,
-                'controls': playerControls,
+                'controls': 0, // 🎮 Disable YouTube controls (use custom controls)
                 'rel': 0,
                 'showinfo': 0,
                 'modestbranding': 1,
-                'disablekb': isLiveMode && !isAdmin ? 1 : 0, // Disable keyboard cho user trong live mode
-                'fs': isLiveMode && !isAdmin ? 0 : 1, // Disable fullscreen cho user trong live mode
+                'disablekb': 1, // 🎮 Disable YouTube keyboard (use custom shortcuts)
+                'fs': 0, // 🎮 Disable YouTube fullscreen (use custom fullscreen)
                 'iv_load_policy': 3 // Hide annotations
             },
             events: {
@@ -484,6 +1171,38 @@ function updatePlayerOverlay() {
 function onPlayerReady(event) {
     isPlayerReady = true;
     console.log('YouTube player sẵn sàng!');
+    
+    // Hide placeholder and loading
+    if (videoPlaceholder) videoPlaceholder.style.display = 'none';
+    if (loading) loading.style.display = 'none';
+    
+    // 🎮 Show custom controls and click overlay
+    if (customControls) {
+        customControls.classList.remove('hidden');
+        customControls.classList.add('visible');
+    }
+    
+    if (videoClickOverlay) {
+        videoClickOverlay.classList.remove('hidden');
+    }
+    
+    // 🎮 Initialize custom controls (only once)
+    if (!window.customControlsInitialized) {
+        initializeCustomControls();
+        window.customControlsInitialized = true;
+    }
+    
+    // 🎮 Set video title
+    if (videoTitle && player) {
+        try {
+            const videoData = player.getVideoData();
+            if (videoData && videoData.title) {
+                videoTitle.textContent = videoData.title;
+            }
+        } catch (error) {
+            console.log('Could not get video title');
+        }
+    }
 }
 
 // Player state change callback
