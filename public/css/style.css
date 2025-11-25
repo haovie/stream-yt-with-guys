@@ -10,6 +10,14 @@ body {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     min-height: 100vh;
     color: #333;
+    /* Performance optimizations */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    /* Enable hardware acceleration */
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    perspective: 1000px;
 }
 
 .container {
@@ -128,6 +136,12 @@ body {
     border-radius: 10px;
     overflow: hidden;
     background: #000;
+    /* Performance optimizations */
+    will-change: transform;
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    -webkit-transform: translateZ(0);
+    -webkit-backface-visibility: hidden;
 }
 
 #youtube-player {
@@ -136,6 +150,15 @@ body {
     left: 0;
     width: 100%;
     height: 100%;
+    /* Enable hardware acceleration for smoother video playback */
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    -webkit-transform: translateZ(0);
+    -webkit-backface-visibility: hidden;
+    will-change: transform;
+    /* Optimize rendering */
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: crisp-edges;
 }
 
 .video-placeholder {
@@ -227,6 +250,16 @@ body {
     max-height: 400px;
     margin-bottom: 15px;
     padding-right: 10px;
+    /* Performance optimizations for scrolling */
+    -webkit-overflow-scrolling: touch;
+    overflow-scrolling: touch;
+    scroll-behavior: smooth;
+    /* Enable GPU acceleration */
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    will-change: scroll-position;
+    /* Optimize repaints */
+    contain: layout style paint;
 }
 
 .chat-messages::-webkit-scrollbar {
@@ -840,9 +873,23 @@ body {
 }
 
 @keyframes pulse {
-    0% { opacity: 1; }
-    50% { opacity: 0.7; }
-    100% { opacity: 1; }
+    0% { 
+        opacity: 1; 
+        transform: scale(1);
+    }
+    50% { 
+        opacity: 0.7; 
+        transform: scale(0.98);
+    }
+    100% { 
+        opacity: 1; 
+        transform: scale(1);
+    }
+}
+
+/* Add will-change for animated elements */
+[class*="pulse"] {
+    will-change: opacity, transform;
 }
 
 /* Queue Modal */
@@ -1069,11 +1116,18 @@ body {
     0%, 100% { 
         border-color: #e74c3c;
         box-shadow: 0 0 20px rgba(231, 76, 60, 0.5);
+        transform: translateZ(0);
     }
     50% { 
         border-color: #c0392b;
         box-shadow: 0 0 30px rgba(231, 76, 60, 0.8);
+        transform: translateZ(0);
     }
+}
+
+/* Optimize live mode container */
+.video-container.live-mode {
+    will-change: border-color, box-shadow;
 }
 
 /* Disable pointer events for non-admin in live mode */
@@ -1147,8 +1201,19 @@ body {
 }
 
 @keyframes syncSpin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+    from { 
+        transform: rotate(0deg) translateZ(0);
+    }
+    to { 
+        transform: rotate(360deg) translateZ(0);
+    }
+}
+
+/* Optimize sync indicator */
+.sync-indicator {
+    will-change: transform, opacity;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
 }
 
 /* Enhanced Live Mode Styles */
@@ -1216,30 +1281,54 @@ body {
 
 /* Animations */
 @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+    0% { 
+        transform: rotate(0deg) translateZ(0);
+    }
+    100% { 
+        transform: rotate(360deg) translateZ(0);
+    }
+}
+
+/* Optimize loading spinner */
+.loading-spinner {
+    will-change: transform;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
 }
 
 @keyframes slideIn {
     from {
         opacity: 0;
-        transform: translateY(20px);
+        transform: translateY(20px) translateZ(0);
     }
     to {
         opacity: 1;
-        transform: translateY(0);
+        transform: translateY(0) translateZ(0);
     }
+}
+
+/* Optimize message animations */
+.message {
+    will-change: transform, opacity;
+    backface-visibility: hidden;
 }
 
 @keyframes modalSlideIn {
     from {
         opacity: 0;
-        transform: scale(0.7);
+        transform: scale(0.7) translateZ(0);
     }
     to {
         opacity: 1;
-        transform: scale(1);
+        transform: scale(1) translateZ(0);
     }
+}
+
+/* Optimize modals */
+.modal-content {
+    will-change: transform, opacity;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
 }
 
 /* Responsive Design */

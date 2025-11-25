@@ -10,7 +10,22 @@ const io = socketIo(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
-  }
+  },
+  // Tối ưu hóa cho streaming real-time
+  pingInterval: 10000, // 10s thay vì 25s mặc định
+  pingTimeout: 5000, // 5s thay vì 20s mặc định
+  transports: ['websocket', 'polling'], // Ưu tiên websocket
+  allowUpgrades: true,
+  perMessageDeflate: {
+    threshold: 1024 // Nén messages > 1KB
+  },
+  httpCompression: true,
+  // Tăng buffer size
+  maxHttpBufferSize: 1e8, // 100MB
+  // Giảm latency
+  connectTimeout: 45000,
+  // Upgrade timeout
+  upgradeTimeout: 10000
 });
 
 // Middleware
@@ -304,22 +319,43 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Throttle map để tránh spam
+  const stateChangeThrottle = new Map();
+  
   // Đồng bộ trạng thái video (chỉ admin mới có thể điều khiển)
   socket.on('video-state-change', (data) => {
     const { state, roomId } = data;
     const room = rooms.get(roomId);
     
-    if (room && room.isLiveMode) {
+    if (!room) return;
+    
+    // Throttle để tránh quá nhiều updates
+    const throttleKey = `${socket.id}_${roomId}`;
+    const lastUpdate = stateChangeThrottle.get(throttleKey) || 0;
+    const now = Date.now();
+    
+    // Cho phép update nếu là play/pause hoặc đã qua 100ms
+    const isPlayPauseChange = room.videoState && 
+                              room.videoState.isPlaying !== state.isPlaying;
+    
+    if (!isPlayPauseChange && (now - lastUpdate) < 100) {
+      return; // Throttle
+    }
+    
+    stateChangeThrottle.set(throttleKey, now);
+    
+    if (room.isLiveMode) {
       // Chỉ admin mới có thể điều khiển video trong live mode
       if (socket.isAdmin && room.adminId === socket.id) {
         room.videoState = {
           ...state,
-          lastUpdate: Date.now(),
+          lastUpdate: now,
           adminId: socket.id
         };
         
         // Gửi trạng thái đến tất cả người dùng khác với force sync
-        socket.to(roomId).emit('video-state-sync', {
+        // Sử dụng volatile để tăng performance (bỏ qua nếu connection chậm)
+        socket.volatile.to(roomId).emit('video-state-sync', {
           ...state,
           forceSync: true,
           adminControl: true
@@ -329,10 +365,10 @@ io.on('connection', (socket) => {
       // Chế độ bình thường - ai cũng có thể điều khiển
       room.videoState = {
         ...state,
-        lastUpdate: Date.now()
+        lastUpdate: now
       };
       
-      socket.to(roomId).emit('video-state-sync', state);
+      socket.volatile.to(roomId).emit('video-state-sync', state);
     }
   });
 
@@ -347,6 +383,34 @@ io.on('connection', (socket) => {
         ...room.videoState,
         forceSync: true,
         adminControl: true
+      });
+    }
+  });
+  
+  // Sync playback rate
+  socket.on('playback-rate-change', (data) => {
+    const { rate, roomId } = data;
+    const room = rooms.get(roomId);
+    
+    if (room && socket.isAdmin && room.adminId === socket.id && room.isLiveMode) {
+      socket.to(roomId).emit('playback-rate-sync', { rate });
+    }
+  });
+  
+  // Ping/pong for latency monitoring
+  socket.on('ping', () => {
+    socket.emit('pong');
+  });
+  
+  // Request sync
+  socket.on('request-sync', (data) => {
+    const { roomId } = data;
+    const room = rooms.get(roomId);
+    
+    if (room && room.videoState) {
+      socket.emit('video-state-sync', {
+        ...room.videoState,
+        forceSync: true
       });
     }
   });
