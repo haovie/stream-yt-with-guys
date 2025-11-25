@@ -70,11 +70,33 @@
                             <span>Tin nhắn mới</span>
                         </div>
                         
-                        <div class="chat-overlay-input-container">
-                            <input type="text" id="chat-overlay-input" placeholder="Nhập bình luận..." maxlength="200" />
-                            <button id="chat-overlay-send" class="chat-overlay-send-btn">
-                                <i class="fas fa-paper-plane"></i>
-                            </button>
+                        <div class="chat-overlay-input-wrapper">
+                            <!-- Emoji Picker for Overlay -->
+                            <div id="chat-overlay-emoji-picker" class="chat-overlay-emoji-picker hidden">
+                                <div class="emoji-categories">
+                                    <button class="emoji-category active" data-category="smileys">😀</button>
+                                    <button class="emoji-category" data-category="people">👋</button>
+                                    <button class="emoji-category" data-category="nature">🌸</button>
+                                    <button class="emoji-category" data-category="food">🍕</button>
+                                    <button class="emoji-category" data-category="activities">⚽</button>
+                                    <button class="emoji-category" data-category="travel">🚗</button>
+                                    <button class="emoji-category" data-category="objects">💡</button>
+                                    <button class="emoji-category" data-category="symbols">❤️</button>
+                                </div>
+                                <div class="emoji-grid" id="chat-overlay-emoji-grid">
+                                    <!-- Emojis will be populated by JavaScript -->
+                                </div>
+                            </div>
+                            
+                            <div class="chat-overlay-input-container">
+                                <button id="chat-overlay-emoji-btn" class="chat-overlay-action-btn" title="Emoji">
+                                    <i class="fas fa-smile"></i>
+                                </button>
+                                <input type="text" id="chat-overlay-input" placeholder="Nhập bình luận..." maxlength="200" />
+                                <button id="chat-overlay-send" class="chat-overlay-send-btn">
+                                    <i class="fas fa-paper-plane"></i>
+                                </button>
+                            </div>
                         </div>
                     </div>
                     

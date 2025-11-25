@@ -50,6 +50,9 @@ const chatOverlaySendBtn = document.getElementById('chat-overlay-send');
 const newMessageIndicator = document.getElementById('new-message-indicator');
 const chatOverlayToggle = document.getElementById('chat-overlay-toggle');
 const chatBadge = document.getElementById('chat-badge');
+const chatOverlayEmojiBtn = document.getElementById('chat-overlay-emoji-btn');
+const chatOverlayEmojiPicker = document.getElementById('chat-overlay-emoji-picker');
+const chatOverlayEmojiGrid = document.getElementById('chat-overlay-emoji-grid');
 
 // 🔥 Chat Overlay State (TikTok Style)
 let isUserScrolling = false;
@@ -57,6 +60,12 @@ let scrollTimeout = null;
 let newMessagesPending = 0;
 let isChatCollapsed = false;
 let unreadMessages = 0;
+
+// 🎯 Draggable Chat Overlay State
+let isDragging = false;
+let dragOffsetX = 0;
+let dragOffsetY = 0;
+let chatPosition = { x: null, y: null };
 
 // 🎮 Custom Video Controls Elements
 const customControls = document.getElementById('custom-controls');
@@ -165,8 +174,39 @@ function setupEventListeners() {
     
     // 🎯 Chat Overlay Toggle button
     if (chatOverlayToggle) {
-        chatOverlayToggle.addEventListener('click', toggleChatOverlay);
+        let clickStartX = 0;
+        let clickStartY = 0;
+        
+        chatOverlayToggle.addEventListener('mousedown', (e) => {
+            clickStartX = e.clientX;
+            clickStartY = e.clientY;
+            startDragChatOverlay(e);
+        });
+        
+        chatOverlayToggle.addEventListener('click', (e) => {
+            // Only toggle if we didn't drag (moved less than 5px)
+            const dx = Math.abs(e.clientX - clickStartX);
+            const dy = Math.abs(e.clientY - clickStartY);
+            
+            if (dx < 5 && dy < 5) {
+                toggleChatOverlay();
+            }
+        });
     }
+    
+    // 🎯 Chat Overlay Emoji button
+    if (chatOverlayEmojiBtn) {
+        chatOverlayEmojiBtn.addEventListener('click', toggleOverlayEmojiPicker);
+    }
+    
+    // 🎯 Make chat overlay draggable when clicking on messages area
+    if (chatOverlayMessages) {
+        chatOverlayMessages.addEventListener('mousedown', startDragChatOverlay);
+    }
+    
+    // 🎯 Global drag handlers
+    document.addEventListener('mousemove', dragChatOverlay);
+    document.addEventListener('mouseup', stopDragChatOverlay);
     
     // 🔥 Fullscreen change detection
     document.addEventListener('fullscreenchange', handleFullscreenChange);
@@ -176,7 +216,7 @@ function setupEventListeners() {
     
     function handleFullscreenChange() {
         const inFullscreen = isFullscreen();
-        toggleChatOverlay(inFullscreen);
+        showChatOverlay(inFullscreen);
         
         if (inFullscreen) {
             // ✅ FIX: Initialize scroll state properly when entering fullscreen
@@ -222,8 +262,16 @@ function setupEventListeners() {
 
     // Click outside to close emoji picker
     document.addEventListener('click', function(e) {
+        // Hide main emoji picker
         if (!emojiPicker.contains(e.target) && !emojiBtn.contains(e.target)) {
             hideEmojiPicker();
+        }
+        
+        // Hide overlay emoji picker
+        if (chatOverlayEmojiPicker && chatOverlayEmojiBtn) {
+            if (!chatOverlayEmojiPicker.contains(e.target) && !chatOverlayEmojiBtn.contains(e.target)) {
+                hideOverlayEmojiPicker();
+            }
         }
     });
 
@@ -231,6 +279,13 @@ function setupEventListeners() {
     emojiPicker.addEventListener('click', function(e) {
         e.stopPropagation();
     });
+    
+    // Prevent overlay emoji picker from closing when clicking inside it
+    if (chatOverlayEmojiPicker) {
+        chatOverlayEmojiPicker.addEventListener('click', function(e) {
+            e.stopPropagation();
+        });
+    }
 
     // Admin controls
     toggleLiveModeBtn.addEventListener('click', toggleLiveMode);
@@ -544,8 +599,13 @@ function isAtBottom(element) {
 function showNewMessageIndicator() {
     if (!newMessageIndicator) return;
     
-    // Update text with count
-    const countText = newMessagesPending > 1 ? `${newMessagesPending} tin nhắn mới` : 'Tin nhắn mới';
+    // Update text with count if there are pending messages, otherwise show "Back to latest"
+    let countText;
+    if (newMessagesPending > 0) {
+        countText = newMessagesPending > 1 ? `${newMessagesPending} tin nhắn mới` : 'Tin nhắn mới';
+    } else {
+        countText = 'Về tin nhắn mới nhất';
+    }
     newMessageIndicator.querySelector('span').textContent = countText;
     
     // Show indicator
@@ -581,6 +641,8 @@ function handleOverlayScroll() {
         isUserScrolling = true;
         chatOverlayMessages.classList.remove('idle');
         chatOverlayMessages.classList.add('scrolling');
+        // Always show indicator when user scrolls up
+        showNewMessageIndicator();
     }
     
     // Reset to idle after 2 seconds of no scrolling (if at bottom)
@@ -651,14 +713,165 @@ function sendOverlayMessage() {
     chatOverlayInput.value = '';
 }
 
-// 🔥 Toggle chat overlay visibility in fullscreen
-function toggleChatOverlay(show) {
+// 🎯 Toggle overlay emoji picker
+function toggleOverlayEmojiPicker(e) {
+    e.stopPropagation();
+    if (chatOverlayEmojiPicker.classList.contains('hidden')) {
+        showOverlayEmojiPicker();
+    } else {
+        hideOverlayEmojiPicker();
+    }
+}
+
+// 🎯 Show overlay emoji picker
+function showOverlayEmojiPicker() {
+    if (!chatOverlayEmojiPicker) return;
+    chatOverlayEmojiPicker.classList.remove('hidden');
+    chatOverlayEmojiBtn.classList.add('active');
+    
+    // Populate emojis if not already done
+    if (chatOverlayEmojiGrid && chatOverlayEmojiGrid.children.length === 0) {
+        populateOverlayEmojis('smileys');
+        
+        // Add category click handlers
+        const categories = chatOverlayEmojiPicker.querySelectorAll('.emoji-category');
+        categories.forEach(cat => {
+            cat.addEventListener('click', function() {
+                categories.forEach(c => c.classList.remove('active'));
+                this.classList.add('active');
+                populateOverlayEmojis(this.dataset.category);
+            });
+        });
+    }
+}
+
+// 🎯 Hide overlay emoji picker
+function hideOverlayEmojiPicker() {
+    if (!chatOverlayEmojiPicker) return;
+    chatOverlayEmojiPicker.classList.add('hidden');
+    chatOverlayEmojiBtn.classList.remove('active');
+}
+
+// 🎯 Populate overlay emoji grid
+function populateOverlayEmojis(category) {
+    if (!chatOverlayEmojiGrid) return;
+    chatOverlayEmojiGrid.innerHTML = '';
+    const emojis = emojiData[category] || emojiData.smileys;
+    
+    emojis.forEach(emoji => {
+        const emojiBtn = document.createElement('button');
+        emojiBtn.className = 'emoji-item';
+        emojiBtn.textContent = emoji;
+        emojiBtn.addEventListener('click', () => {
+            insertOverlayEmoji(emoji);
+        });
+        chatOverlayEmojiGrid.appendChild(emojiBtn);
+    });
+}
+
+// 🎯 Insert emoji into overlay input
+function insertOverlayEmoji(emoji) {
+    if (!chatOverlayInput) return;
+    const cursorPos = chatOverlayInput.selectionStart;
+    const textBefore = chatOverlayInput.value.substring(0, cursorPos);
+    const textAfter = chatOverlayInput.value.substring(chatOverlayInput.selectionEnd);
+    
+    chatOverlayInput.value = textBefore + emoji + textAfter;
+    chatOverlayInput.focus();
+    
+    // Set cursor position after emoji
+    const newPos = cursorPos + emoji.length;
+    chatOverlayInput.setSelectionRange(newPos, newPos);
+    
+    hideOverlayEmojiPicker();
+}
+
+// 🔥 Show/hide chat overlay visibility in fullscreen
+function showChatOverlay(show) {
     if (!chatOverlay) return;
     
     if (show) {
         chatOverlay.classList.remove('hidden');
     } else {
         chatOverlay.classList.add('hidden');
+    }
+}
+
+// 🎯 Start dragging chat overlay
+function startDragChatOverlay(e) {
+    if (!chatOverlay) return;
+    
+    // Don't drag when clicking on input or send button
+    if (e.target === chatOverlayInput || e.target === chatOverlaySendBtn) return;
+    if (e.target.closest('.chat-overlay-input-container')) return;
+    
+    // Don't drag when clicking inside messages (for scrolling/selecting text)
+    // Unless it's the toggle button
+    if (e.target !== chatOverlayToggle && !e.target.closest('#chat-overlay-toggle')) {
+        if (e.target === chatOverlayMessages || e.target.closest('.chat-overlay-message')) {
+            // Only drag messages area if shift key is pressed
+            if (!e.shiftKey) return;
+        }
+    }
+    
+    isDragging = true;
+    
+    // Get current position or use computed style
+    const rect = chatOverlay.getBoundingClientRect();
+    dragOffsetX = e.clientX - rect.left;
+    dragOffsetY = e.clientY - rect.top;
+    
+    // Add dragging cursor
+    chatOverlay.style.cursor = 'grabbing';
+    if (chatOverlayToggle) chatOverlayToggle.style.cursor = 'grabbing';
+    
+    // Prevent text selection while dragging
+    e.preventDefault();
+}
+
+// 🎯 Drag chat overlay
+function dragChatOverlay(e) {
+    if (!isDragging || !chatOverlay) return;
+    
+    // Calculate new position
+    let newX = e.clientX - dragOffsetX;
+    let newY = e.clientY - dragOffsetY;
+    
+    // Get container bounds (video container or window)
+    const container = videoContainer || document.body;
+    const containerRect = container.getBoundingClientRect();
+    const overlayRect = chatOverlay.getBoundingClientRect();
+    
+    // Constrain to container bounds
+    const maxX = containerRect.width - overlayRect.width;
+    const maxY = containerRect.height - overlayRect.height;
+    
+    newX = Math.max(0, Math.min(newX, maxX));
+    newY = Math.max(0, Math.min(newY, maxY));
+    
+    // Apply position
+    chatOverlay.style.left = newX + 'px';
+    chatOverlay.style.bottom = 'auto';
+    chatOverlay.style.top = newY + 'px';
+    
+    // Save position
+    chatPosition.x = newX;
+    chatPosition.y = newY;
+}
+
+// 🎯 Stop dragging chat overlay
+function stopDragChatOverlay(e) {
+    if (!isDragging) return;
+    
+    isDragging = false;
+    
+    // Restore cursor
+    if (chatOverlay) chatOverlay.style.cursor = '';
+    if (chatOverlayToggle) chatOverlayToggle.style.cursor = 'pointer';
+    
+    // Prevent click event from firing if we dragged
+    if (e.target === chatOverlayToggle && (Math.abs(dragOffsetX) > 5 || Math.abs(dragOffsetY) > 5)) {
+        e.stopPropagation();
     }
 }
 
