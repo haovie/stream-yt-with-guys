@@ -12,11 +12,6 @@ let isLiveMode = false;
 let videoQueue = [];
 let adminId = null;
 
-// Performance optimization variables
-let stateChangeDebounceTimer = null;
-let lastPlayerState = null;
-let lastEmitTime = 0;
-
 // Emoji data
 const emojiData = {
     smileys: ['😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊', '😇', '🥰', '😍', '🤩', '😘', '😗', '😚', '😙', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫', '🤔', '🤐', '🤨', '😐', '😑', '😶', '😏', '😒', '🙄', '😬', '🤥', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧', '🥵', '🥶', '🥴', '😵', '🤯', '🤠', '🥳', '😎', '🤓', '🧐'],
@@ -173,96 +168,22 @@ function generateRoomId() {
 
 // Connect to server
 function connectToServer(username, roomId, adminPassword) {
-    // Tối ưu socket connection
-    socket = io({
-        transports: ['websocket', 'polling'], // Ưu tiên websocket
-        upgrade: true,
-        rememberUpgrade: true,
-        reconnection: true,
-        reconnectionAttempts: 10,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
-        timeout: 20000,
-        // Tối ưu performance
-        perMessageDeflate: false, // Tắt compression cho client để giảm CPU
-        forceNew: false,
-        // Ping settings
-        pingInterval: 10000,
-        pingTimeout: 5000
-    });
+    socket = io();
     
     socket.on('connect', () => {
-        console.log('Kết nối thành công! Transport:', socket.io.engine.transport.name);
+        console.log('Kết nối thành công!');
         socket.emit('join-room', { username, roomId, adminPassword });
         
         hideLoading();
         hideJoinModal();
-        
-        // Monitor connection quality
-        monitorConnectionQuality();
     });
     
-    socket.on('disconnect', (reason) => {
-        console.log('Mất kết nối!', reason);
-        showNotification('Mất kết nối với server! Đang thử kết nối lại...', 'error');
-        
-        // Pause video khi mất kết nối
-        if (player && isPlayerReady) {
-            try {
-                player.pauseVideo();
-            } catch (error) {
-                console.log('Cannot pause video:', error);
-            }
-        }
-    });
-    
-    socket.on('reconnect', (attemptNumber) => {
-        console.log('Đã kết nối lại sau', attemptNumber, 'lần thử');
-        showNotification('Đã kết nối lại thành công!', 'success');
-        
-        // Request sync lại
-        setTimeout(() => {
-            socket.emit('request-sync', { roomId: currentRoom });
-        }, 500);
-    });
-    
-    socket.on('connect_error', (error) => {
-        console.error('Lỗi kết nối:', error);
-    });
-    
-    // Monitor transport upgrades
-    socket.io.engine.on('upgrade', (transport) => {
-        console.log('Transport upgraded to:', transport.name);
+    socket.on('disconnect', () => {
+        console.log('Mất kết nối!');
+        showNotification('Mất kết nối với server!', 'error');
     });
     
     setupSocketListeners();
-}
-
-// Monitor connection quality
-let lastPingTime = 0;
-let pingLatency = 0;
-
-function monitorConnectionQuality() {
-    if (!socket) return;
-    
-    // Ping every 3 seconds
-    setInterval(() => {
-        if (socket && socket.connected) {
-            lastPingTime = Date.now();
-            socket.emit('ping');
-        }
-    }, 3000);
-    
-    socket.on('pong', () => {
-        pingLatency = Date.now() - lastPingTime;
-        console.log('Latency:', pingLatency, 'ms');
-        
-        // Cảnh báo nếu latency cao
-        if (pingLatency > 300) {
-            console.warn('High latency detected:', pingLatency, 'ms');
-            // Có thể tự động giảm quality ở đây
-        }
-    });
 }
 
 // Setup socket listeners
@@ -358,66 +279,47 @@ function setupSocketListeners() {
             syncVideoState(state);
         }
     });
-    
-    // Sync playback rate
-    socket.on('playback-rate-sync', (data) => {
-        if (player && isPlayerReady && !isAdmin) {
-            try {
-                player.setPlaybackRate(data.rate);
-            } catch (error) {
-                console.log('Cannot set playback rate:', error);
-            }
-        }
-    });
 }
 
-// Display message in chat (optimized with requestAnimationFrame)
+// Display message in chat
 function displayMessage(data) {
-    // Batch DOM operations for better performance
-    requestAnimationFrame(() => {
-        const messageDiv = document.createElement('div');
-        let messageClass = 'message';
-        
-        if (data.isSystem) {
-            messageClass += ' system';
-        } else if (data.messageType === 'file') {
-            messageClass += ' file';
-        }
-        
-        if (data.username === currentUser && !data.isSystem) {
-            messageClass += ' own';
-        }
-        
-        messageDiv.className = messageClass;
-        
-        let messageContent = '';
-        if (data.messageType === 'file') {
-            messageContent = createFileMessageContent(data);
-        } else {
-            messageContent = `
-                <div class="message-header">
-                    <span class="username">${data.username}</span>
-                    <span class="timestamp">${data.timestamp}</span>
-                </div>
-                <div class="message-content">${escapeHtml(data.message)}</div>
-            `;
-        }
-        
-        messageDiv.innerHTML = messageContent;
-        
-        // Remove welcome message if exists (before appending new message)
-        const welcomeMessage = chatMessages.querySelector('.welcome-message');
-        if (welcomeMessage) {
-            welcomeMessage.remove();
-        }
-        
-        chatMessages.appendChild(messageDiv);
-        
-        // Smooth scroll with requestAnimationFrame
-        requestAnimationFrame(() => {
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-        });
-    });
+    const messageDiv = document.createElement('div');
+    let messageClass = 'message';
+    
+    if (data.isSystem) {
+        messageClass += ' system';
+    } else if (data.messageType === 'file') {
+        messageClass += ' file';
+    }
+    
+    if (data.username === currentUser && !data.isSystem) {
+        messageClass += ' own';
+    }
+    
+    messageDiv.className = messageClass;
+    
+    let messageContent = '';
+    if (data.messageType === 'file') {
+        messageContent = createFileMessageContent(data);
+    } else {
+        messageContent = `
+            <div class="message-header">
+                <span class="username">${data.username}</span>
+                <span class="timestamp">${data.timestamp}</span>
+            </div>
+            <div class="message-content">${escapeHtml(data.message)}</div>
+        `;
+    }
+    
+    messageDiv.innerHTML = messageContent;
+    chatMessages.appendChild(messageDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    
+    // Remove welcome message if exists
+    const welcomeMessage = chatMessages.querySelector('.welcome-message');
+    if (welcomeMessage) {
+        welcomeMessage.remove();
+    }
 }
 
 // Display system message
@@ -513,24 +415,11 @@ function loadYouTubeVideo(videoId) {
                 'modestbranding': 1,
                 'disablekb': isLiveMode && !isAdmin ? 1 : 0, // Disable keyboard cho user trong live mode
                 'fs': isLiveMode && !isAdmin ? 0 : 1, // Disable fullscreen cho user trong live mode
-                'iv_load_policy': 3, // Hide annotations
-                // Tối ưu hóa performance và quality
-                'playsinline': 1, // Play inline trên mobile
-                'origin': window.location.origin,
-                'widget_referrer': window.location.origin,
-                // Tăng buffer để giảm lag
-                'enablejsapi': 1,
-                // Quality settings
-                'vq': 'hd720', // Mặc định HD720 để cân bằng quality và performance
-                // Giảm latency
-                'start': 0,
-                'end': 0
+                'iv_load_policy': 3 // Hide annotations
             },
             events: {
                 'onReady': onPlayerReady,
-                'onStateChange': onPlayerStateChange,
-                'onPlaybackQualityChange': onPlaybackQualityChange,
-                'onPlaybackRateChange': onPlaybackRateChange
+                'onStateChange': onPlayerStateChange
             }
         });
     }
@@ -586,53 +475,6 @@ function updatePlayerOverlay() {
 function onPlayerReady(event) {
     isPlayerReady = true;
     console.log('YouTube player sẵn sàng!');
-    
-    // Tối ưu quality và buffering
-    try {
-        // Set quality cao nhất có thể
-        const availableQualityLevels = player.getAvailableQualityLevels();
-        if (availableQualityLevels && availableQualityLevels.length > 0) {
-            // Ưu tiên HD720 để cân bằng
-            if (availableQualityLevels.includes('hd720')) {
-                player.setPlaybackQuality('hd720');
-            } else if (availableQualityLevels.includes('large')) {
-                player.setPlaybackQuality('large');
-            }
-        }
-        
-        // Set playback rate mặc định
-        player.setPlaybackRate(1);
-        
-        // Preload video
-        player.mute();
-        player.playVideo();
-        setTimeout(() => {
-            player.pauseVideo();
-            player.unMute();
-            player.seekTo(0, true);
-        }, 500);
-        
-    } catch (error) {
-        console.log('Không thể tối ưu player:', error);
-    }
-}
-
-// Callback khi quality thay đổi
-function onPlaybackQualityChange(event) {
-    console.log('Quality changed to:', event.data);
-}
-
-// Callback khi playback rate thay đổi
-function onPlaybackRateChange(event) {
-    console.log('Playback rate changed to:', event.data);
-    
-    // Đồng bộ playback rate nếu admin thay đổi
-    if (isAdmin && isLiveMode) {
-        socket.emit('playback-rate-change', {
-            rate: event.data,
-            roomId: currentRoom
-        });
-    }
 }
 
 // Player state change callback
@@ -644,33 +486,17 @@ function onPlayerStateChange(event) {
         return; // User thường không được điều khiển
     }
     
-    // Debounce để tránh spam events
-    clearTimeout(stateChangeDebounceTimer);
+    const state = {
+        isPlaying: event.data === YT.PlayerState.PLAYING,
+        currentTime: player.getCurrentTime(),
+        playerState: event.data
+    };
     
-    stateChangeDebounceTimer = setTimeout(() => {
-        const now = Date.now();
-        const state = {
-            isPlaying: event.data === YT.PlayerState.PLAYING,
-            currentTime: player.getCurrentTime(),
-            playerState: event.data
-        };
-        
-        // Chỉ emit nếu state thực sự thay đổi và đã qua ít nhất 100ms
-        const stateChanged = !lastPlayerState || 
-                            lastPlayerState.isPlaying !== state.isPlaying ||
-                            lastPlayerState.playerState !== state.playerState;
-        
-        if (stateChanged && (now - lastEmitTime) > 100) {
-            // Emit state change to other users
-            socket.emit('video-state-change', {
-                state: state,
-                roomId: currentRoom
-            });
-            
-            lastPlayerState = state;
-            lastEmitTime = now;
-        }
-    }, 50); // Debounce 50ms
+    // Emit state change to other users
+    socket.emit('video-state-change', {
+        state: state,
+        roomId: currentRoom
+    });
 }
 
 // Sync video state
@@ -685,26 +511,20 @@ function syncVideoState(state) {
             const currentTime = player.getCurrentTime();
             const timeDiff = Math.abs(currentTime - state.currentTime);
             
-            // Giảm threshold xuống 0.5s để sync mượt hơn
-            if (state.forceSync || state.adminControl || timeDiff > 0.5) {
-                // Sử dụng predictive sync để giảm lag
-                const networkLatency = 0.15; // Ước tính 150ms latency
-                const predictedTime = state.currentTime + (state.isPlaying ? networkLatency : 0);
-                player.seekTo(predictedTime, true);
+            // Force sync nếu là admin control hoặc time diff > 1 giây
+            if (state.forceSync || state.adminControl || timeDiff > 1) {
+                player.seekTo(state.currentTime, true);
             }
             
             // Sync play/pause state ngay lập tức
-            const currentState = player.getPlayerState();
-            if (state.isPlaying && currentState !== YT.PlayerState.PLAYING && currentState !== YT.PlayerState.BUFFERING) {
+            if (state.isPlaying && player.getPlayerState() !== YT.PlayerState.PLAYING) {
                 player.playVideo();
-            } else if (!state.isPlaying && currentState === YT.PlayerState.PLAYING) {
+            } else if (!state.isPlaying && player.getPlayerState() === YT.PlayerState.PLAYING) {
                 player.pauseVideo();
             }
             
             // Hiển thị sync indicator
-            if (timeDiff > 0.5) {
-                showSyncIndicator();
-            }
+            showSyncIndicator();
             
         } catch (error) {
             console.error('Lỗi đồng bộ video:', error);
@@ -712,7 +532,7 @@ function syncVideoState(state) {
         
         setTimeout(() => {
             isSyncing = false;
-        }, 200); // Giảm xuống 200ms
+        }, 500); // Giảm thời gian sync
         
     } else {
         // Chế độ bình thường
@@ -722,18 +542,15 @@ function syncVideoState(state) {
             const currentTime = player.getCurrentTime();
             const timeDiff = Math.abs(currentTime - state.currentTime);
             
-            // Giảm threshold xuống 0.8s để sync mượt hơn
-            if (timeDiff > 0.8) {
-                const networkLatency = 0.15;
-                const predictedTime = state.currentTime + (state.isPlaying ? networkLatency : 0);
-                player.seekTo(predictedTime, true);
+            // Sync time if difference is more than 2 seconds
+            if (timeDiff > 2) {
+                player.seekTo(state.currentTime, true);
             }
             
             // Sync play/pause state
-            const currentState = player.getPlayerState();
-            if (state.isPlaying && currentState !== YT.PlayerState.PLAYING && currentState !== YT.PlayerState.BUFFERING) {
+            if (state.isPlaying && player.getPlayerState() !== YT.PlayerState.PLAYING) {
                 player.playVideo();
-            } else if (!state.isPlaying && currentState === YT.PlayerState.PLAYING) {
+            } else if (!state.isPlaying && player.getPlayerState() === YT.PlayerState.PLAYING) {
                 player.pauseVideo();
             }
         } catch (error) {
@@ -742,11 +559,11 @@ function syncVideoState(state) {
         
         setTimeout(() => {
             isSyncing = false;
-        }, 300); // Giảm xuống 300ms
+        }, 1000);
     }
 }
 
-// Hiển thị sync indicator (optimized with requestAnimationFrame)
+// Hiển thị sync indicator
 function showSyncIndicator() {
     const videoContainer = document.querySelector('.video-container');
     let syncIndicator = videoContainer.querySelector('.sync-indicator');
@@ -759,18 +576,14 @@ function showSyncIndicator() {
         videoContainer.appendChild(syncIndicator);
     }
     
-    // Use requestAnimationFrame for smooth animation
-    requestAnimationFrame(() => {
-        syncIndicator.style.opacity = '1';
-        
-        setTimeout(() => {
-            requestAnimationFrame(() => {
-                if (syncIndicator) {
-                    syncIndicator.style.opacity = '0';
-                }
-            });
-        }, 1000);
-    });
+    // Show with fade in effect
+    syncIndicator.style.opacity = '1';
+    
+    setTimeout(() => {
+        if (syncIndicator) {
+            syncIndicator.style.opacity = '0';
+        }
+    }, 1000);
 }
 
 // Utility functions
@@ -1204,45 +1017,30 @@ function updateAdminUI() {
 
 // Auto sync mechanism cho admin
 let adminSyncInterval = null;
-let lastSyncTime = 0;
-let lastSentState = null;
 
 function startAdminAutoSync() {
     if (adminSyncInterval) return;
     
-    // Giảm interval xuống 300ms để sync mượt hơn
     adminSyncInterval = setInterval(() => {
         if (isAdmin && isLiveMode && player && isPlayerReady && !isSyncing) {
-            const now = Date.now();
             const state = {
                 isPlaying: player.getPlayerState() === YT.PlayerState.PLAYING,
                 currentTime: player.getCurrentTime(),
                 playerState: player.getPlayerState()
             };
             
-            // Chỉ emit nếu state thay đổi hoặc đã qua 2s (để maintain sync)
-            const stateChanged = !lastSentState || 
-                                 lastSentState.isPlaying !== state.isPlaying ||
-                                 Math.abs(lastSentState.currentTime - state.currentTime) > 0.5;
-            
-            if (stateChanged || (now - lastSyncTime) > 2000) {
-                socket.emit('video-state-change', {
-                    state: state,
-                    roomId: currentRoom
-                });
-                lastSentState = state;
-                lastSyncTime = now;
-            }
+            socket.emit('video-state-change', {
+                state: state,
+                roomId: currentRoom
+            });
         }
-    }, 300); // Sync mỗi 300ms thay vì 1s
+    }, 1000); // Sync mỗi giây
 }
 
 function stopAdminAutoSync() {
     if (adminSyncInterval) {
         clearInterval(adminSyncInterval);
         adminSyncInterval = null;
-        lastSentState = null;
-        lastSyncTime = 0;
     }
 }
 
