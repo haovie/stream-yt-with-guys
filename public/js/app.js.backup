@@ -279,15 +279,6 @@ function setupSocketListeners() {
             syncVideoState(state);
         }
     });
-
-    // ⚡ OPTIMIZED: Compact video sync handler
-    // Format: [state, time] where state: 0=paused, 1=playing, 2=buffering, 3=ended
-    socket.on('vs', (data) => {
-        if (!isSyncing && player && isPlayerReady) {
-            const [state, time] = data;
-            syncVideoStateCompact(state, time);
-        }
-    });
 }
 
 // Display message in chat
@@ -501,59 +492,11 @@ function onPlayerStateChange(event) {
         playerState: event.data
     };
     
-    // Emit state change to other users (legacy)
+    // Emit state change to other users
     socket.emit('video-state-change', {
         state: state,
         roomId: currentRoom
     });
-
-    // ⚡ OPTIMIZED: Also emit compact format
-    // Map YT states to compact: 0=paused, 1=playing, 2=buffering, 3=ended
-    const stateMap = {
-        [YT.PlayerState.ENDED]: 3,
-        [YT.PlayerState.PLAYING]: 1,
-        [YT.PlayerState.PAUSED]: 0,
-        [YT.PlayerState.BUFFERING]: 2,
-        [YT.PlayerState.CUED]: 0
-    };
-    const compactState = stateMap[event.data] !== undefined ? stateMap[event.data] : 0;
-    const currentTime = Math.floor(player.getCurrentTime() * 10) / 10; // Round to 1 decimal
-    
-    // Send compact format (no volatile here, only on server side)
-    socket.emit('vs', [compactState, currentTime]);
-}
-
-// ⚡ OPTIMIZED: Sync video state from compact format
-// Format: [state, time] where state: 0=paused, 1=playing, 2=buffering, 3=ended
-function syncVideoStateCompact(state, time) {
-    if (!player || !isPlayerReady) return;
-    
-    // In live mode, users cannot control
-    if (isLiveMode && !isAdmin) {
-        isSyncing = true;
-        
-        try {
-            const currentTime = player.getCurrentTime();
-            const timeDiff = Math.abs(currentTime - time);
-            
-            // Sync time if difference > 1 second
-            if (timeDiff > 1) {
-                player.seekTo(time, true);
-            }
-            
-            // Sync play state
-            const currentState = player.getPlayerState();
-            if (state === 1 && currentState !== YT.PlayerState.PLAYING) {
-                player.playVideo();
-            } else if (state === 0 && currentState === YT.PlayerState.PLAYING) {
-                player.pauseVideo();
-            }
-        } catch (error) {
-            console.error('Sync error:', error);
-        } finally {
-            setTimeout(() => { isSyncing = false; }, 500);
-        }
-    }
 }
 
 // Sync video state
@@ -1078,30 +1021,20 @@ let adminSyncInterval = null;
 function startAdminAutoSync() {
     if (adminSyncInterval) return;
     
-    // ⚡ OPTIMIZED: Faster sync with compact format and volatile
     adminSyncInterval = setInterval(() => {
         if (isAdmin && isLiveMode && player && isPlayerReady && !isSyncing) {
-            const ps = player.getPlayerState();
+            const state = {
+                isPlaying: player.getPlayerState() === YT.PlayerState.PLAYING,
+                currentTime: player.getCurrentTime(),
+                playerState: player.getPlayerState()
+            };
             
-            // Only sync when playing to reduce traffic
-            if (ps === YT.PlayerState.PLAYING) {
-                // Map YT states to compact: 0=paused, 1=playing, 2=buffering, 3=ended
-                const stateMap = {
-                    [YT.PlayerState.ENDED]: 3,
-                    [YT.PlayerState.PLAYING]: 1,
-                    [YT.PlayerState.PAUSED]: 0,
-                    [YT.PlayerState.BUFFERING]: 2,
-                    [YT.PlayerState.CUED]: 0
-                };
-                const compactState = stateMap[ps] !== undefined ? stateMap[ps] : 1;
-                const currentTime = Math.floor(player.getCurrentTime() * 10) / 10;
-                
-                // ⚡ Send compact format [state, time]
-                // Server will handle volatile emission
-                socket.emit('vs', [compactState, currentTime]);
-            }
+            socket.emit('video-state-change', {
+                state: state,
+                roomId: currentRoom
+            });
         }
-    }, 200); // ⚡ 200ms instead of 1000ms = 5x faster sync
+    }, 1000); // Sync mỗi giây
 }
 
 function stopAdminAutoSync() {

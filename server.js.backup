@@ -10,15 +10,7 @@ const io = socketIo(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
-  },
-  // ⚡ Low latency configuration
-  pingInterval: 10000,        // Ping every 10s (reduce traffic)
-  pingTimeout: 5000,          // Timeout after 5s
-  upgradeTimeout: 3000,       // Faster WebSocket upgrade
-  maxHttpBufferSize: 1e6,     // 1MB buffer (reduced from default)
-  transports: ['websocket', 'polling'],  // Prefer WebSocket
-  allowUpgrades: true,
-  perMessageDeflate: false    // ⚡ DISABLE compression for low latency
+  }
 });
 
 // Middleware
@@ -144,24 +136,6 @@ io.on('connection', (socket) => {
     
     io.to(roomId).emit('chat-message', chatData);
     console.log(`Chat trong phòng ${roomId}: ${socket.username}: ${message}`);
-  });
-
-  // ⚡ OPTIMIZED: Compact chat message (cm = chat-message)
-  // Format: [username, message, type, timestamp]
-  // type: 0=text, 1=file, 2=system
-  socket.on('cm', (data) => {
-    const [message, type = 0] = data;
-    const chatData = {
-      id: Date.now(),
-      username: socket.username,
-      message: message,
-      messageType: type === 0 ? 'text' : (type === 1 ? 'file' : 'system'),
-      timestamp: new Date().toLocaleTimeString('vi-VN'),
-      userId: socket.id
-    };
-    
-    io.to(socket.roomId).emit('chat-message', chatData);
-    console.log(`Chat trong phòng ${socket.roomId}: ${socket.username}: ${message}`);
   });
 
   // Xử lý tin nhắn riêng
@@ -359,43 +333,6 @@ io.on('connection', (socket) => {
       };
       
       socket.to(roomId).emit('video-state-sync', state);
-    }
-  });
-
-  // ⚡ OPTIMIZED: Compact video sync (vs = video-sync)
-  // Format: [state, time] where state: 0=paused, 1=playing, 2=buffering, 3=ended
-  socket.on('vs', (data) => {
-    const room = rooms.get(socket.roomId);
-    if (!room) return;
-    
-    // Parse compact format: [state, time]
-    const [state, time] = data;
-    
-    if (room.isLiveMode) {
-      // Only admin can control in live mode
-      if (socket.isAdmin && room.adminId === socket.id) {
-        // Update room state
-        room.videoState = {
-          isPlaying: state === 1,
-          currentTime: time,
-          playerState: state,
-          lastUpdate: Date.now()
-        };
-        
-        // ⚡ VOLATILE: Skip old packets if network is lagging
-        socket.to(socket.roomId).volatile.emit('vs', data);
-      }
-    } else {
-      // Normal mode - anyone can control
-      room.videoState = {
-        isPlaying: state === 1,
-        currentTime: time,
-        playerState: state,
-        lastUpdate: Date.now()
-      };
-      
-      // ⚡ VOLATILE for smooth sync
-      socket.to(socket.roomId).volatile.emit('vs', data);
     }
   });
 
