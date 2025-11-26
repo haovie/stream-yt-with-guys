@@ -123,13 +123,13 @@
                             <!-- Control Buttons -->
                             <div class="controls-buttons">
                                 <div class="controls-left">
-                                    <button id="play-pause-btn" class="control-btn" title="Play/Pause (Space)">
+                                    <button id="play-pause-btn" class="control-btn admin-control" title="Play/Pause (Space)">
                                         <i class="fas fa-play"></i>
                                     </button>
-                                    <button id="rewind-btn" class="control-btn" title="Rewind 10s (←)">
+                                    <button id="rewind-btn" class="control-btn admin-control" title="Rewind 10s (←)">
                                         <i class="fas fa-backward"></i>
                                     </button>
-                                    <button id="forward-btn" class="control-btn" title="Forward 10s (→)">
+                                    <button id="forward-btn" class="control-btn admin-control" title="Forward 10s (→)">
                                         <i class="fas fa-forward"></i>
                                     </button>
                                     
@@ -146,6 +146,49 @@
                                 </div>
                                 
                                 <div class="controls-right">
+                                    <!-- Playback Speed (Admin only) -->
+                                    <div class="speed-control admin-only">
+                                        <button id="speed-btn" class="control-btn" title="Playback Speed">
+                                            <span class="speed-text">1x</span>
+                                        </button>
+                                        <div class="speed-menu" id="speed-menu">
+                                            <div class="speed-option" data-speed="0.25">0.25x</div>
+                                            <div class="speed-option" data-speed="0.5">0.5x</div>
+                                            <div class="speed-option" data-speed="0.75">0.75x</div>
+                                            <div class="speed-option active" data-speed="1">Normal</div>
+                                            <div class="speed-option" data-speed="1.25">1.25x</div>
+                                            <div class="speed-option" data-speed="1.5">1.5x</div>
+                                            <div class="speed-option" data-speed="1.75">1.75x</div>
+                                            <div class="speed-option" data-speed="2">2x</div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Quality Selector (Admin only) -->
+                                    <div class="quality-control admin-only">
+                                        <button id="quality-btn" class="control-btn" title="Quality">
+                                            <span class="quality-icon">HD</span>
+                                        </button>
+                                        <div class="quality-menu" id="quality-menu">
+                                            <div class="quality-option active" data-quality="auto">Auto</div>
+                                            <div class="quality-option" data-quality="hd1080">1080p</div>
+                                            <div class="quality-option" data-quality="hd720">720p</div>
+                                            <div class="quality-option" data-quality="large">480p</div>
+                                            <div class="quality-option" data-quality="medium">360p</div>
+                                            <div class="quality-option" data-quality="small">240p</div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Subtitles/Captions (Admin only) -->
+                                    <div class="caption-control admin-only">
+                                        <button id="caption-btn" class="control-btn" title="Subtitles/Captions">
+                                            <i class="fas fa-closed-captioning"></i>
+                                        </button>
+                                        <div class="caption-menu" id="caption-menu">
+                                            <div class="caption-option active" data-track="off">Off</div>
+                                            <!-- Captions will be populated dynamically -->
+                                        </div>
+                                    </div>
+                                    
                                     <button id="settings-btn" class="control-btn" title="Settings">
                                         <i class="fas fa-cog"></i>
                                     </button>

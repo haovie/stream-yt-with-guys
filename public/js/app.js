@@ -82,11 +82,23 @@ const progressHandle = document.getElementById('progress-handle');
 const currentTimeDisplay = document.getElementById('current-time');
 const durationDisplay = document.getElementById('duration');
 const videoTitle = document.getElementById('video-title');
+const speedBtn = document.getElementById('speed-btn');
+const speedMenu = document.getElementById('speed-menu');
+const qualityBtn = document.getElementById('quality-btn');
+const qualityMenu = document.getElementById('quality-menu');
+const captionBtn = document.getElementById('caption-btn');
+const captionMenu = document.getElementById('caption-menu');
 
 // Custom controls state
 let controlsTimeout = null;
 let isSeeking = false;
 let lastVolume = 100;
+let currentSpeed = 1;
+let currentQuality = 'auto';
+let currentCaptionTrack = null;
+let currentCaptionLangCode = null; // Store language code to maintain preference across videos
+let availableCaptions = [];
+let availableQualities = [];
 
 // New elements for enhanced features
 const emojiBtn = document.getElementById('emoji-btn');
@@ -380,6 +392,30 @@ function setupSocketListeners() {
         });
     });
     
+    // 🎮 Admin controls sync
+    socket.on('playback-speed-change', (data) => {
+        if (!isAdmin && data.speed) {
+            setPlaybackSpeed(data.speed);
+            displaySystemMessage(`Admin đổi tốc độ phát: ${data.speed}x`);
+        }
+    });
+    
+    socket.on('video-quality-change', (data) => {
+        if (!isAdmin && data.quality) {
+            setVideoQuality(data.quality);
+            const qualityText = data.quality === 'auto' ? 'Auto' : data.quality;
+            displaySystemMessage(`Admin đổi chất lượng: ${qualityText}`);
+        }
+    });
+    
+    socket.on('caption-change', (data) => {
+        if (!isAdmin) {
+            setCaptions(data.track);
+            const captionText = data.track === 'off' ? 'Off' : (availableCaptions[data.track]?.displayName || 'On');
+            displaySystemMessage(`Admin đổi phụ đề: ${captionText}`);
+        }
+    });
+    
     // User count and list
     socket.on('user-count', (count) => {
         userCountDisplay.textContent = `${count} người online`;
@@ -404,6 +440,17 @@ function setupSocketListeners() {
         
         updateAdminUI();
         updateQueueDisplay();
+        
+        // 🎮 Show/hide admin controls
+        if (isAdmin) {
+            document.body.classList.add('is-admin');
+            console.log('✅ Admin controls enabled');
+        } else {
+            document.body.classList.remove('is-admin');
+        }
+        
+        // 🎮 Update live mode UI (hide play/pause/rewind/forward for users)
+        updateLiveModeUI();
         
         const userPrefix = isAdmin ? '👑 Admin' : '';
         currentUserDisplay.textContent = `${userPrefix} ${currentUser}`;
@@ -988,6 +1035,63 @@ function initializeCustomControls() {
     document.addEventListener('mozfullscreenchange', updateFullscreenButton);
     document.addEventListener('MSFullscreenChange', updateFullscreenButton);
     
+    // Speed control
+    if (speedBtn) {
+        speedBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleSpeedMenu();
+        });
+    }
+    
+    if (speedMenu) {
+        const speedOptions = speedMenu.querySelectorAll('.speed-option');
+        speedOptions.forEach(option => {
+            option.addEventListener('click', () => {
+                const speed = parseFloat(option.dataset.speed);
+                setPlaybackSpeed(speed);
+                toggleSpeedMenu();
+            });
+        });
+    }
+    
+    // Quality control
+    if (qualityBtn) {
+        qualityBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleQualityMenu();
+        });
+    }
+    
+    // Quality options will be populated dynamically by loadAvailableQualities()
+    
+    // Caption control
+    if (captionBtn) {
+        captionBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleCaptionMenu();
+        });
+    }
+    
+    if (captionMenu) {
+        // "Off" option listener
+        const offOption = captionMenu.querySelector('[data-track="off"]');
+        if (offOption) {
+            offOption.addEventListener('click', () => {
+                setCaptions('off');
+                toggleCaptionMenu();
+            });
+        }
+    }
+    
+    // Close menus when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.speed-control') && 
+            !e.target.closest('.quality-control') && 
+            !e.target.closest('.caption-control')) {
+            closeAllMenus();
+        }
+    });
+    
     console.log('✅ Custom controls initialized');
 }
 
@@ -1299,11 +1403,635 @@ function adjustVolume(amount) {
     }
 }
 
+// 🎮 Set Playback Speed
+function setPlaybackSpeed(speed) {
+    if (!player || !isPlayerReady) return;
+    
+    try {
+        player.setPlaybackRate(speed);
+        currentSpeed = speed;
+        
+        // Update button text
+        if (speedBtn) {
+            const speedText = speedBtn.querySelector('.speed-text');
+            if (speedText) {
+                speedText.textContent = speed === 1 ? '1x' : speed + 'x';
+            }
+        }
+        
+        // Update active state
+        if (speedMenu) {
+            const options = speedMenu.querySelectorAll('.speed-option');
+            options.forEach(opt => {
+                if (parseFloat(opt.dataset.speed) === speed) {
+                    opt.classList.add('active');
+                } else {
+                    opt.classList.remove('active');
+                }
+            });
+        }
+        
+        // Emit to other users if admin
+        if (isAdmin && socket) {
+            socket.emit('playback-speed-change', {
+                speed: speed,
+                roomId: currentRoom
+            });
+        }
+        
+        console.log('Playback speed set to:', speed);
+    } catch (error) {
+        console.error('Failed to set playback speed:', error);
+    }
+}
+
+// 🎮 Toggle Quality Menu
+function toggleQualityMenu() {
+    if (!qualityMenu) return;
+    
+    const isVisible = qualityMenu.classList.contains('visible');
+    
+    // Close speed and caption menus if open
+    if (speedMenu) speedMenu.classList.remove('visible');
+    if (captionMenu) captionMenu.classList.remove('visible');
+    
+    if (isVisible) {
+        qualityMenu.classList.remove('visible');
+    } else {
+        qualityMenu.classList.add('visible');
+    }
+}
+
+// 🎮 Load Available Quality Levels
+function loadAvailableQualities() {
+    if (!player || !isPlayerReady || !qualityMenu) return;
+    
+    // Only show loading if menu is currently empty or has loading state
+    const currentContent = qualityMenu.innerHTML;
+    if (!currentContent || currentContent.includes('quality-loading')) {
+        showQualityLoading();
+    }
+    
+    try {
+        // Get available quality levels from YouTube API
+        const qualityLevels = player.getAvailableQualityLevels();
+        
+        // Filter out empty strings and 'auto'/'default' from the list
+        const validQualities = qualityLevels.filter(q => q && q !== 'auto' && q !== 'default');
+        
+        if (validQualities && validQualities.length > 0) {
+            // Found actual quality levels (not just auto)
+            availableQualities = validQualities;
+            buildQualityMenu(validQualities);
+        } else {
+            // No quality levels available yet or only auto
+            // Don't overwrite if we already have qualities loaded
+            if (availableQualities.length === 0) {
+                buildAutoQualityMenu();
+            }
+        }
+    } catch (error) {
+        if (availableQualities.length === 0) {
+            buildAutoQualityMenu();
+        }
+    }
+}
+
+// Show loading state in quality menu
+function showQualityLoading() {
+    if (!qualityMenu) return;
+    
+    qualityMenu.innerHTML = '';
+    const loadingOption = document.createElement('div');
+    loadingOption.className = 'quality-option quality-loading';
+    loadingOption.style.cssText = 'opacity: 0.7; cursor: wait; pointer-events: none;';
+    loadingOption.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Đang tải...';
+    qualityMenu.appendChild(loadingOption);
+}
+
+// Build quality menu with all available levels
+function buildQualityMenu(qualityLevels) {
+    if (!qualityMenu) return;
+    
+    qualityMenu.innerHTML = '';
+    
+    // Quality name mapping
+    const qualityNames = {
+        'highres': '4K/8K',
+        'hd2160': '4K (2160p)',
+        'hd1440': '1440p',
+        'hd1080': '1080p',
+        'hd720': '720p',
+        'large': '480p',
+        'medium': '360p',
+        'small': '240p',
+        'tiny': '144p',
+        'auto': 'Auto',
+        'default': 'Auto'
+    };
+    
+    // Add "Auto" option first (default active)
+    const autoOption = document.createElement('div');
+    autoOption.className = 'quality-option active';
+    autoOption.dataset.quality = 'auto';
+    autoOption.innerHTML = '<i class="fas fa-magic"></i> Auto';
+    autoOption.addEventListener('click', () => {
+        setVideoQuality('auto');
+        toggleQualityMenu();
+    });
+    qualityMenu.appendChild(autoOption);
+    
+    // Add separator
+    const separator = document.createElement('div');
+    separator.className = 'quality-separator';
+    separator.style.cssText = 'height: 1px; background: rgba(255,255,255,0.1); margin: 4px 0;';
+    qualityMenu.appendChild(separator);
+    
+    // Add available quality levels
+    qualityLevels.forEach((quality) => {
+        // Skip 'auto' or 'default' as we already added it
+        if (quality === 'auto' || quality === 'default') return;
+        
+        const option = document.createElement('div');
+        option.className = 'quality-option';
+        option.dataset.quality = quality;
+        
+        const displayName = qualityNames[quality] || quality.toUpperCase();
+        
+        // Add HD icon for HD qualities
+        if (quality.startsWith('hd') || quality === 'highres') {
+            option.innerHTML = `<i class="fas fa-film"></i> ${displayName}`;
+        } else {
+            option.innerHTML = `<i class="fas fa-video"></i> ${displayName}`;
+        }
+        
+        option.addEventListener('click', () => {
+            setVideoQuality(quality);
+            toggleQualityMenu();
+        });
+        
+        qualityMenu.appendChild(option);
+    });
+}
+
+// Build auto-only quality menu (fallback)
+function buildAutoQualityMenu() {
+    if (!qualityMenu) return;
+    
+    qualityMenu.innerHTML = '';
+    
+    const autoOption = document.createElement('div');
+    autoOption.className = 'quality-option active';
+    autoOption.dataset.quality = 'auto';
+    autoOption.innerHTML = '<i class="fas fa-magic"></i> Auto';
+    autoOption.addEventListener('click', () => {
+        setVideoQuality('auto');
+        toggleQualityMenu();
+    });
+    qualityMenu.appendChild(autoOption);
+}
+
+// 🎮 Set Video Quality
+function setVideoQuality(quality) {
+    if (!player || !isPlayerReady) return;
+    
+    try {
+        if (quality === 'auto' || quality === 'default') {
+            // Reset to auto quality by setting to highest available
+            const availableLevels = player.getAvailableQualityLevels();
+            if (availableLevels && availableLevels.length > 0) {
+                // Set to first available (usually highest)
+                player.setPlaybackQuality(availableLevels[0]);
+            }
+            currentQuality = 'auto';
+        } else {
+            // Set specific quality
+            player.setPlaybackQuality(quality);
+            currentQuality = quality;
+        }
+        
+        // Update active state in menu
+        if (qualityMenu) {
+            const options = qualityMenu.querySelectorAll('.quality-option');
+            options.forEach(opt => {
+                if (opt.dataset.quality === quality) {
+                    opt.classList.add('active');
+                } else {
+                    opt.classList.remove('active');
+                }
+            });
+        }
+        
+        // Update quality button display
+        updateQualityButtonDisplay(quality);
+        
+        // Emit to other users if admin
+        if (isAdmin && socket) {
+            socket.emit('video-quality-change', {
+                quality: quality,
+                roomId: currentRoom
+            });
+        }
+        
+        // Show system message
+        const qualityNames = {
+            'highres': '4K/8K',
+            'hd2160': '4K',
+            'hd1440': '1440p',
+            'hd1080': '1080p',
+            'hd720': '720p',
+            'large': '480p',
+            'medium': '360p',
+            'small': '240p',
+            'tiny': '144p',
+            'auto': 'Auto',
+            'default': 'Auto'
+        };
+        const displayName = qualityNames[quality] || quality.toUpperCase();
+        displaySystemMessage(`Chất lượng: ${displayName}`);
+        
+    } catch (error) {
+        displaySystemMessage('⚠️ Không thể thay đổi chất lượng video');
+    }
+}
+
+// Update quality button display text
+function updateQualityButtonDisplay(quality) {
+    if (!qualityBtn) return;
+    
+    const qualityIcon = qualityBtn.querySelector('.quality-icon');
+    if (!qualityIcon) return;
+    
+    const qualityDisplay = {
+        'highres': '4K',
+        'hd2160': '4K',
+        'hd1440': '2K',
+        'hd1080': 'FHD',
+        'hd720': 'HD',
+        'large': '480',
+        'medium': '360',
+        'small': '240',
+        'tiny': '144',
+        'auto': 'HD',
+        'default': 'HD'
+    };
+    
+    qualityIcon.textContent = qualityDisplay[quality] || 'HD';
+}
+
+// 🎮 Toggle Caption Menu
+function toggleCaptionMenu() {
+    if (!captionMenu) return;
+    
+    const isVisible = captionMenu.classList.contains('visible');
+    
+    // Close other menus
+    if (speedMenu) speedMenu.classList.remove('visible');
+    if (qualityMenu) qualityMenu.classList.remove('visible');
+    
+    if (isVisible) {
+        captionMenu.classList.remove('visible');
+    } else {
+        captionMenu.classList.add('visible');
+    }
+}
+
+// 🎮 Toggle Speed Menu
+function toggleSpeedMenu() {
+    if (!speedMenu) return;
+    
+    const isVisible = speedMenu.classList.contains('visible');
+    
+    // Close other menus
+    if (qualityMenu) qualityMenu.classList.remove('visible');
+    if (captionMenu) captionMenu.classList.remove('visible');
+    
+    if (isVisible) {
+        speedMenu.classList.remove('visible');
+    } else {
+        speedMenu.classList.add('visible');
+    }
+}
+
+// 🎮 Load Available Captions
+function loadAvailableCaptions() {
+    if (!player || !isPlayerReady || !captionMenu) return;
+    
+    // Only show loading if menu is currently empty or has loading state
+    const currentContent = captionMenu.innerHTML;
+    if (!currentContent || currentContent.includes('caption-loading')) {
+        showCaptionLoading();
+    }
+    
+    try {
+        const options = player.getOptions();
+        
+        if (options && options.includes('captions')) {
+            // Load captions module first to ensure it's available
+            try {
+                player.loadModule('captions');
+            } catch (e) {
+                // Module already loaded or not needed
+            }
+            
+            // Wait for module to load
+            setTimeout(() => {
+                try {
+                    const trackInfo = player.getOption('captions', 'tracklist');
+                    
+                    if (trackInfo && Array.isArray(trackInfo) && trackInfo.length > 0) {
+                        availableCaptions = trackInfo;
+                        buildCaptionMenu(trackInfo);
+                        return;
+                    }
+                } catch (err) {
+                    // Failed to get tracklist
+                }
+                
+                // No captions available
+                // Don't overwrite if we already have captions loaded
+                if (availableCaptions.length === 0) {
+                    buildNoCaptionsMenu();
+                }
+            }, 500);
+            
+        } else {
+            // Captions option not available
+            if (availableCaptions.length === 0) {
+                buildNoCaptionsMenu();
+            }
+        }
+        
+    } catch (error) {
+        if (availableCaptions.length === 0) {
+            buildNoCaptionsMenu();
+        }
+    }
+}
+
+// Show loading state in caption menu
+function showCaptionLoading() {
+    if (!captionMenu) return;
+    
+    captionMenu.innerHTML = '';
+    const loadingOption = document.createElement('div');
+    loadingOption.className = 'caption-option caption-loading';
+    loadingOption.style.cssText = 'opacity: 0.7; cursor: wait; pointer-events: none;';
+    loadingOption.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Đang tải phụ đề...';
+    captionMenu.appendChild(loadingOption);
+}
+
+// Build full caption menu with all tracks
+function buildCaptionMenu(trackInfo) {
+    if (!captionMenu) return;
+    
+    captionMenu.innerHTML = '';
+    
+    // Check if we need to apply the previous caption preference
+    let foundPreviousTrack = false;
+    
+    // Add "Off" option
+    const offOption = document.createElement('div');
+    offOption.className = 'caption-option';
+    offOption.dataset.track = 'off';
+    offOption.innerHTML = '<i class="fas fa-times"></i> Tắt phụ đề';
+    offOption.addEventListener('click', () => {
+        setCaptions('off');
+        toggleCaptionMenu();
+    });
+    
+    // Set "Off" as active if no caption language is saved
+    if (!currentCaptionLangCode) {
+        offOption.classList.add('active');
+    }
+    
+    captionMenu.appendChild(offOption);
+    
+    // Add separator
+    const separator = document.createElement('div');
+    separator.className = 'caption-separator';
+    separator.style.cssText = 'height: 1px; background: rgba(255,255,255,0.1); margin: 4px 0;';
+    captionMenu.appendChild(separator);
+    
+    // Add available caption tracks
+    trackInfo.forEach((track, index) => {
+        const option = document.createElement('div');
+        option.className = 'caption-option';
+        option.dataset.track = index.toString();
+        option.dataset.langCode = track.languageCode || '';
+        option.dataset.langName = track.languageName || '';
+        
+        // Display format: "English" or "English (auto-generated)"
+        let displayText = track.displayName || track.name || track.languageName || track.languageCode || `Track ${index + 1}`;
+        
+        // Check if this track matches the saved language preference
+        if (currentCaptionLangCode && track.languageCode === currentCaptionLangCode && !foundPreviousTrack) {
+            option.classList.add('active');
+            foundPreviousTrack = true;
+            // Apply this caption to the new video
+            setTimeout(() => {
+                setCaptions(index);
+            }, 500);
+        }
+        
+        // Add icon for auto-generated captions
+        if (track.kind === 'asr' || displayText.toLowerCase().includes('auto')) {
+            option.innerHTML = `<i class="fas fa-robot"></i> ${displayText}`;
+        } else {
+            option.innerHTML = `<i class="fas fa-closed-captioning"></i> ${displayText}`;
+        }
+        
+        option.addEventListener('click', () => {
+            setCaptions(index);
+            toggleCaptionMenu();
+        });
+        
+        captionMenu.appendChild(option);
+    });
+    
+    // If previous language not found in new video, turn off captions
+    if (currentCaptionLangCode && !foundPreviousTrack) {
+        offOption.classList.add('active');
+        currentCaptionTrack = null;
+        setTimeout(() => {
+            try {
+                player.unloadModule('captions');
+                if (captionBtn) captionBtn.classList.remove('active');
+                displaySystemMessage('Phụ đề: Tắt (video không có phụ đề đã chọn)');
+            } catch (e) {
+                // Ignore
+            }
+        }, 500);
+    }
+}
+
+// Build "no captions available" menu
+function buildNoCaptionsMenu() {
+    if (!captionMenu) return;
+    
+    captionMenu.innerHTML = '';
+    
+    const noCaption = document.createElement('div');
+    noCaption.className = 'caption-option caption-unavailable';
+    noCaption.style.cssText = 'opacity: 0.6; cursor: not-allowed; pointer-events: none;';
+    noCaption.innerHTML = '<i class="fas fa-info-circle"></i> Không có phụ đề';
+    captionMenu.appendChild(noCaption);
+}
+
+// 🎮 Set Captions
+function setCaptions(trackIndex) {
+    if (!player || !isPlayerReady) return;
+    
+    try {
+        if (trackIndex === 'off' || trackIndex === null) {
+            // Turn off captions
+            try {
+                player.unloadModule('captions');
+            } catch (e) {
+                try {
+                    player.setOption('captions', 'track', {});
+                } catch (e2) {
+                    // Could not turn off captions
+                }
+            }
+            currentCaptionTrack = null;
+            currentCaptionLangCode = null;
+            
+        } else if (trackIndex === 'on') {
+            // Simple toggle on - enable first available track
+            try {
+                player.loadModule('captions');
+                const options = player.getOptions();
+                if (options && options.includes('captions')) {
+                    const tracks = player.getOption('captions', 'tracklist');
+                    if (tracks && tracks.length > 0) {
+                        const firstTrack = tracks[0];
+                        player.setOption('captions', 'track', {
+                            'languageCode': firstTrack.languageCode,
+                            'name': firstTrack.name || ''
+                        });
+                        currentCaptionLangCode = firstTrack.languageCode;
+                    }
+                }
+            } catch (e) {
+                // Could not enable captions
+            }
+            currentCaptionTrack = 'on';
+            
+        } else {
+            // Turn on specific caption track by index
+            const index = parseInt(trackIndex);
+            
+            if (!isNaN(index) && availableCaptions[index]) {
+                const track = availableCaptions[index];
+                
+                try {
+                    player.loadModule('captions');
+                    
+                    const trackOptions = {
+                        'languageCode': track.languageCode
+                    };
+                    
+                    if (track.name) trackOptions.name = track.name;
+                    if (track.languageName) trackOptions.languageName = track.languageName;
+                    
+                    player.setOption('captions', 'track', trackOptions);
+                    currentCaptionTrack = index;
+                    currentCaptionLangCode = track.languageCode; // Save language code for next video
+                } catch (e) {
+                    displaySystemMessage('⚠️ Không thể bật phụ đề này');
+                    return;
+                }
+            } else {
+                return;
+            }
+        }
+        
+        // Update active state in menu
+        if (captionMenu) {
+            const options = captionMenu.querySelectorAll('.caption-option');
+            options.forEach(opt => {
+                if (opt.dataset.track == trackIndex) {
+                    opt.classList.add('active');
+                } else {
+                    opt.classList.remove('active');
+                }
+            });
+        }
+        
+        // Update caption button icon state
+        if (captionBtn) {
+            if (trackIndex === 'off' || trackIndex === null) {
+                captionBtn.classList.remove('active');
+            } else {
+                captionBtn.classList.add('active');
+            }
+        }
+        
+        // Emit to other users if admin
+        if (isAdmin && socket) {
+            socket.emit('caption-change', {
+                track: trackIndex,
+                roomId: currentRoom
+            });
+        }
+        
+        // Show system message
+        let captionText;
+        if (trackIndex === 'off') {
+            captionText = 'Tắt';
+        } else if (trackIndex === 'on') {
+            captionText = 'Bật';
+        } else {
+            const index = parseInt(trackIndex);
+            if (!isNaN(index) && availableCaptions[index]) {
+                captionText = availableCaptions[index].displayName || 
+                              availableCaptions[index].languageName || 
+                              availableCaptions[index].languageCode || 
+                              'Bật';
+            } else {
+                captionText = 'Bật';
+            }
+        }
+        displaySystemMessage(`Phụ đề: ${captionText}`);
+        
+    } catch (error) {
+        displaySystemMessage('⚠️ Không thể thay đổi phụ đề cho video này');
+    }
+}
+
+// 🎮 Close all menus when clicking outside
+function closeAllMenus() {
+    if (speedMenu) speedMenu.classList.remove('visible');
+    if (qualityMenu) qualityMenu.classList.remove('visible');
+    if (captionMenu) captionMenu.classList.remove('visible');
+}
+
+// 🎮 Update Live Mode UI
+function updateLiveModeUI() {
+    if (isLiveMode) {
+        document.body.classList.add('is-live-mode');
+    } else {
+        document.body.classList.remove('is-live-mode');
+    }
+}
+
 // Load YouTube video
 function loadYouTubeVideo(videoId) {
     if (!videoId) return;
     
     videoPlaceholder.style.display = 'none';
+    
+    // Reset states for new video (but keep currentCaptionTrack to remember user preference)
+    availableCaptions = [];
+    // Don't reset currentCaptionTrack - we want to keep the user's caption preference
+    availableQualities = [];
+    currentQuality = 'auto';
+    
+    // Reset video title while loading
+    if (videoTitle) {
+        videoTitle.textContent = 'Đang tải...';
+    }
     
     // Xác định player controls dựa trên live mode và admin status
     const playerControls = getPlayerControls();
@@ -1311,6 +2039,45 @@ function loadYouTubeVideo(videoId) {
     if (player) {
         player.loadVideoById(videoId);
         updatePlayerControls();
+        
+        // Update video title for new video
+        setTimeout(() => {
+            updateVideoTitle();
+        }, 1000);
+        
+        // Reload quality levels for new video
+        setTimeout(() => {
+            loadAvailableQualities();
+        }, 2000);
+        
+        setTimeout(() => {
+            if (availableQualities.length === 0) {
+                loadAvailableQualities();
+            }
+        }, 4000);
+        
+        setTimeout(() => {
+            if (availableQualities.length === 0) {
+                loadAvailableQualities();
+            }
+        }, 6000);
+        
+        // Reload captions for new video
+        setTimeout(() => {
+            loadAvailableCaptions();
+        }, 2500);
+        
+        setTimeout(() => {
+            if (availableCaptions.length === 0) {
+                loadAvailableCaptions();
+            }
+        }, 5000);
+        
+        setTimeout(() => {
+            if (availableCaptions.length === 0) {
+                loadAvailableCaptions();
+            }
+        }, 7000);
     } else {
         player = new YT.Player('youtube-player', {
             height: '100%',
@@ -1324,7 +2091,8 @@ function loadYouTubeVideo(videoId) {
                 'modestbranding': 1,
                 'disablekb': 1, // 🎮 Disable YouTube keyboard (use custom shortcuts)
                 'fs': 0, // 🎮 Disable YouTube fullscreen (use custom fullscreen)
-                'iv_load_policy': 3 // Hide annotations
+                'iv_load_policy': 3, // Hide annotations
+                'cc_load_policy': 0 // Don't auto-load captions, but make them available
             },
             events: {
                 'onReady': onPlayerReady,
@@ -1406,21 +2174,91 @@ function onPlayerReady(event) {
     }
     
     // 🎮 Set video title
-    if (videoTitle && player) {
-        try {
-            const videoData = player.getVideoData();
-            if (videoData && videoData.title) {
-                videoTitle.textContent = videoData.title;
-            }
-        } catch (error) {
-            console.log('Could not get video title');
+    updateVideoTitle();
+    
+    // 🎮 Load available quality levels
+    // Wait longer for YouTube to load video metadata
+    setTimeout(() => {
+        loadAvailableQualities();
+    }, 2000);
+    
+    // 🎮 Retry loading quality levels if still only auto
+    setTimeout(() => {
+        if (availableQualities.length === 0) {
+            loadAvailableQualities();
         }
+    }, 4000);
+    
+    // 🎮 Final retry for quality levels
+    setTimeout(() => {
+        if (availableQualities.length === 0) {
+            loadAvailableQualities();
+        }
+    }, 6000);
+    
+    // 🎮 Load available captions/subtitles
+    // YouTube needs time to load caption tracks
+    setTimeout(() => {
+        loadAvailableCaptions();
+    }, 2500);
+    
+    // 🎮 Retry loading captions for videos that load captions late
+    setTimeout(() => {
+        if (availableCaptions.length === 0) {
+            loadAvailableCaptions();
+        }
+    }, 5000);
+    
+    // 🎮 Final retry for captions
+    setTimeout(() => {
+        if (availableCaptions.length === 0) {
+            loadAvailableCaptions();
+        }
+    }, 7000);
+}
+
+// 🎮 Update Video Title
+function updateVideoTitle() {
+    if (!videoTitle || !player || !isPlayerReady) return;
+    
+    try {
+        const videoData = player.getVideoData();
+        if (videoData && videoData.title) {
+            videoTitle.textContent = videoData.title;
+        } else {
+            videoTitle.textContent = 'Video YouTube';
+        }
+    } catch (error) {
+        videoTitle.textContent = 'Video YouTube';
     }
 }
 
 // Player state change callback
 function onPlayerStateChange(event) {
     if (!isPlayerReady || isSyncing) return;
+    
+    // 🎮 Update video title and load quality/captions when video starts playing
+    // This is a backup check when metadata is definitely available
+    if (event.data === YT.PlayerState.PLAYING) {
+        // Update title if not set
+        if (videoTitle && videoTitle.textContent === 'Đang tải...') {
+            updateVideoTitle();
+        }
+        
+        // Load quality levels if not loaded yet
+        if (availableQualities.length === 0) {
+            setTimeout(() => {
+                loadAvailableQualities();
+            }, 500);
+        }
+        
+        // Load captions if not loaded yet
+        if (availableCaptions.length === 0) {
+            setTimeout(() => {
+                loadAvailableCaptions();
+            }, 1000);
+        }
+    }
     
     // Chỉ admin mới được emit state change trong live mode
     if (isLiveMode && !isAdmin) {
@@ -2296,3 +3134,5 @@ window.addEventListener('beforeunload', function() {
         socket.disconnect();
     }
 });
+
+
