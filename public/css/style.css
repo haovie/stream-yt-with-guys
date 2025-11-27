@@ -1121,6 +1121,112 @@ body {
     z-index: 5;
 }
 
+/* 📱 iOS/Mobile Fullscreen Fallback Mode */
+.video-container.is-ios-fullscreen {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    z-index: 99999 !important;
+    background: #000;
+    margin: 0;
+    padding: 0;
+}
+
+/* Prevent body scrolling when iOS fullscreen is active */
+body.ios-fullscreen-active {
+    overflow: hidden !important;
+    position: fixed;
+    width: 100%;
+    height: 100%;
+}
+
+/* Ensure video fills the screen in iOS fullscreen */
+.video-container.is-ios-fullscreen #youtube-player,
+.video-container.is-ios-fullscreen #youtube-player iframe {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* Chat overlay positioning in iOS fullscreen */
+.video-container.is-ios-fullscreen .chat-overlay {
+    position: fixed !important;
+    z-index: 100001 !important; /* Higher than video container */
+}
+
+/* Custom controls positioning in iOS fullscreen */
+.video-container.is-ios-fullscreen .custom-controls {
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    z-index: 100000 !important; /* Higher than video container, lower than chat */
+}
+
+/* Video click overlay in iOS fullscreen */
+.video-container.is-ios-fullscreen .video-click-overlay {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    z-index: 99998 !important; /* Below controls and chat */
+}
+
+/* 📱 Mobile-specific adjustments for iOS fullscreen */
+@media (max-width: 768px) {
+    /* Adjust chat overlay size on mobile */
+    .video-container.is-ios-fullscreen .chat-overlay {
+        width: calc(100vw - 40px) !important;
+        max-width: 400px;
+        max-height: 50vh !important;
+        bottom: 100px !important; /* More space for mobile controls */
+    }
+    
+    /* Make controls more touch-friendly */
+    .video-container.is-ios-fullscreen .control-btn {
+        padding: 12px !important;
+        font-size: 18px !important;
+        min-width: 44px !important; /* iOS recommended touch target size */
+        min-height: 44px !important;
+    }
+    
+    /* Adjust control buttons spacing */
+    .video-container.is-ios-fullscreen .controls-buttons {
+        gap: 8px;
+    }
+    
+    /* Make chat messages more readable on mobile */
+    .video-container.is-ios-fullscreen .chat-overlay-message {
+        font-size: 14px !important;
+        padding: 8px 12px !important;
+    }
+    
+    /* Adjust input size for mobile */
+    .video-container.is-ios-fullscreen .chat-overlay-input {
+        font-size: 16px !important; /* Prevents zoom on iOS */
+    }
+}
+
+/* 📱 Small mobile devices (phones in portrait) */
+@media (max-width: 480px) {
+    .video-container.is-ios-fullscreen .chat-overlay {
+        width: calc(100vw - 20px) !important;
+        left: 10px !important;
+        max-height: 40vh !important;
+    }
+    
+    /* Hide some controls on very small screens to save space */
+    .video-container.is-ios-fullscreen .video-title {
+        font-size: 12px !important;
+        max-width: 150px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+}
+
 /* 🔥 Live Chat Overlay for Fullscreen (TikTok/Facebook Live Style) */
 .chat-overlay {
     position: absolute;

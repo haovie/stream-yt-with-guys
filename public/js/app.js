@@ -259,6 +259,11 @@ function setupEventListeners() {
             isUserScrolling = false;
             isChatCollapsed = false;
             unreadMessages = 0;
+            
+            // 📱 Also clean up iOS fullscreen if exiting via native API
+            if (videoContainer && videoContainer.classList.contains('is-ios-fullscreen')) {
+                exitIOSFullscreen();
+            }
         }
     }
 
@@ -928,12 +933,18 @@ function stopDragChatOverlay(e) {
 
 // 🔥 Check if video is in fullscreen
 function isFullscreen() {
-    return !!(
+    // Check for native Fullscreen API
+    const nativeFullscreen = !!(
         document.fullscreenElement ||
         document.webkitFullscreenElement ||
         document.mozFullScreenElement ||
         document.msFullscreenElement
     );
+    
+    // Also check for iOS/Mobile CSS fallback mode
+    const iOSFullscreen = videoContainer && videoContainer.classList.contains('is-ios-fullscreen');
+    
+    return nativeFullscreen || iOSFullscreen;
 }
 
 // Send chat message
@@ -1204,9 +1215,37 @@ function updateVolumeIcon(volume) {
 }
 
 // 🎮 Toggle Fullscreen (KEY FIX: Request fullscreen on WRAPPER, not iframe)
+// 📱 iOS Safari & Mobile Fallback: Use CSS-based fullscreen for unsupported browsers
 function toggleFullscreen() {
     if (!videoContainer) return;
     
+    // 📱 Detect iOS Safari and mobile browsers that don't support Fullscreen API on divs
+    const isIOSSafari = /iPhone|iPad|iPod/.test(navigator.userAgent) && !window.MSStream;
+    const isMobileSafari = /Safari/.test(navigator.userAgent) && /Mobile/.test(navigator.userAgent);
+    const isMobileChrome = /Chrome/.test(navigator.userAgent) && /Mobile/.test(navigator.userAgent);
+    const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    
+    // 📱 Check if Fullscreen API is supported for divs (not just video elements)
+    const supportsFullscreenAPI = !!(
+        videoContainer.requestFullscreen ||
+        videoContainer.webkitRequestFullscreen ||
+        videoContainer.mozRequestFullScreen ||
+        videoContainer.msRequestFullscreen
+    );
+    
+    // 📱 iOS Safari and some mobile browsers: Use CSS fallback
+    if ((isIOSSafari || isMobileSafari || (isMobile && !supportsFullscreenAPI))) {
+        if (!videoContainer.classList.contains('is-ios-fullscreen')) {
+            // Enter iOS fullscreen mode
+            enterIOSFullscreen();
+        } else {
+            // Exit iOS fullscreen mode
+            exitIOSFullscreen();
+        }
+        return;
+    }
+    
+    // 🖥️ Desktop and Android/Mobile browsers with Fullscreen API support
     if (!isFullscreen()) {
         // Request fullscreen on WRAPPER div (contains video + overlay + controls)
         if (videoContainer.requestFullscreen) {
@@ -1217,6 +1256,9 @@ function toggleFullscreen() {
             videoContainer.mozRequestFullScreen();
         } else if (videoContainer.msRequestFullscreen) {
             videoContainer.msRequestFullscreen();
+        } else {
+            // Fallback to CSS-based fullscreen if API fails
+            enterIOSFullscreen();
         }
     } else {
         // Exit fullscreen
@@ -1228,8 +1270,74 @@ function toggleFullscreen() {
             document.mozCancelFullScreen();
         } else if (document.msExitFullscreen) {
             document.msExitFullscreen();
+        } else {
+            // Fallback
+            exitIOSFullscreen();
         }
     }
+}
+
+// 📱 Enter iOS/Mobile CSS-based Fullscreen Mode
+function enterIOSFullscreen() {
+    if (!videoContainer) return;
+    
+    // Add CSS class for iOS fullscreen
+    videoContainer.classList.add('is-ios-fullscreen');
+    document.body.classList.add('ios-fullscreen-active');
+    
+    // Show chat overlay (simulate fullscreen behavior)
+    showChatOverlay(true);
+    
+    // Initialize chat overlay state
+    setTimeout(() => {
+        if (chatOverlayMessages) {
+            scrollToBottom(chatOverlayMessages);
+            isUserScrolling = false;
+            newMessagesPending = 0;
+            hideNewMessageIndicator();
+            
+            chatOverlayMessages.classList.remove('scrolling');
+            chatOverlayMessages.classList.add('idle');
+        }
+        
+        // Focus overlay input
+        if (chatOverlayInput) {
+            chatOverlayInput.focus();
+        }
+    }, 300);
+    
+    // Update fullscreen button icon
+    updateFullscreenButton();
+    
+    // Prevent body scrolling
+    document.body.style.overflow = 'hidden';
+    
+    console.log('📱 Entered iOS/Mobile fullscreen mode (CSS fallback)');
+}
+
+// 📱 Exit iOS/Mobile CSS-based Fullscreen Mode
+function exitIOSFullscreen() {
+    if (!videoContainer) return;
+    
+    // Remove CSS class for iOS fullscreen
+    videoContainer.classList.remove('is-ios-fullscreen');
+    document.body.classList.remove('ios-fullscreen-active');
+    
+    // Hide chat overlay
+    showChatOverlay(false);
+    
+    // Reset state
+    isUserScrolling = false;
+    isChatCollapsed = false;
+    unreadMessages = 0;
+    
+    // Update fullscreen button icon
+    updateFullscreenButton();
+    
+    // Restore body scrolling
+    document.body.style.overflow = '';
+    
+    console.log('📱 Exited iOS/Mobile fullscreen mode (CSS fallback)');
 }
 
 // 🎮 Update fullscreen button icon

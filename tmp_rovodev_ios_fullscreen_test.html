@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>iOS Fullscreen Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #f0f0f0;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .info-box {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .device-info {
+            margin: 10px 0;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        
+        .test-area {
+            background: #333;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            position: relative;
+        }
+        
+        .video-box {
+            width: 100%;
+            height: 400px;
+            background: #000;
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 24px;
+        }
+        
+        .controls {
+            margin-top: 20px;
+        }
+        
+        button {
+            padding: 15px 30px;
+            font-size: 16px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        
+        button:hover {
+            background: #0056b3;
+        }
+        
+        button:active {
+            transform: scale(0.98);
+        }
+        
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            background: #28a745;
+            color: white;
+            border-radius: 5px;
+            display: none;
+        }
+        
+        .status.error {
+            background: #dc3545;
+        }
+        
+        /* iOS Fullscreen Styles */
+        .test-area.is-ios-fullscreen {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            z-index: 99999 !important;
+            background: #000;
+            margin: 0;
+            padding: 0;
+            border-radius: 0;
+        }
+        
+        .test-area.is-ios-fullscreen .video-box {
+            width: 100%;
+            height: 100%;
+            border-radius: 0;
+        }
+        
+        .test-area.is-ios-fullscreen .controls {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100000;
+        }
+        
+        body.ios-fullscreen-active {
+            overflow: hidden !important;
+        }
+        
+        .overlay-demo {
+            position: absolute;
+            bottom: 80px;
+            left: 20px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            max-width: 300px;
+            display: none;
+            z-index: 100001;
+        }
+        
+        .test-area.is-ios-fullscreen .overlay-demo {
+            display: block;
+            position: fixed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="info-box">
+            <h1>📱 iOS/Mobile Fullscreen Test</h1>
+            <p>This page tests the iOS Safari fullscreen fallback implementation.</p>
+            
+            <div class="device-info">
+                <strong>Device Info:</strong><br>
+                User Agent: <span id="userAgent"></span><br>
+                Is iOS: <span id="isIOS"></span><br>
+                Is Mobile Safari: <span id="isMobileSafari"></span><br>
+                Fullscreen API Support: <span id="fullscreenSupport"></span>
+            </div>
+        </div>
+        
+        <div class="test-area" id="testArea">
+            <div class="video-box">
+                <div>📺 Video Area<br><small style="font-size:14px">Click fullscreen button below</small></div>
+            </div>
+            
+            <div class="overlay-demo">
+                💬 Chat Overlay Demo<br>
+                <small>This overlay is visible in fullscreen</small><br>
+                <small>Z-index: 100001 (above video)</small>
+            </div>
+            
+            <div class="controls">
+                <button id="fullscreenBtn" onclick="toggleTestFullscreen()">
+                    <span id="btnText">🖼️ Enter Fullscreen</span>
+                </button>
+                <button onclick="showStatus('Testing touch controls', false)">
+                    ▶️ Test Button
+                </button>
+            </div>
+            
+            <div class="status" id="status"></div>
+        </div>
+        
+        <div class="info-box">
+            <h3>✅ What to test:</h3>
+            <ol>
+                <li>Click "Enter Fullscreen" button</li>
+                <li>Verify video area fills entire screen</li>
+                <li>Verify chat overlay is visible and on top of video</li>
+                <li>Verify controls are visible at bottom</li>
+                <li>Verify you can exit fullscreen with same button</li>
+                <li>Verify body scroll is locked in fullscreen</li>
+            </ol>
+            
+            <h3>📱 iOS Safari specific:</h3>
+            <ul>
+                <li>Uses CSS-based fullscreen (position: fixed)</li>
+                <li>Z-index layering: Video (99999) → Controls (100000) → Chat (100001)</li>
+                <li>Body overflow: hidden to prevent scrolling</li>
+            </ul>
+        </div>
+    </div>
+    
+    <script>
+        // Detect device and capabilities
+        const userAgent = navigator.userAgent;
+        const isIOSSafari = /iPhone|iPad|iPod/.test(userAgent) && !window.MSStream;
+        const isMobileSafari = /Safari/.test(userAgent) && /Mobile/.test(userAgent);
+        const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
+        
+        const testArea = document.getElementById('testArea');
+        const supportsFullscreenAPI = !!(
+            testArea.requestFullscreen ||
+            testArea.webkitRequestFullscreen ||
+            testArea.mozRequestFullScreen ||
+            testArea.msRequestFullscreen
+        );
+        
+        // Display device info
+        document.getElementById('userAgent').textContent = userAgent;
+        document.getElementById('isIOS').textContent = isIOSSafari ? '✅ Yes' : '❌ No';
+        document.getElementById('isMobileSafari').textContent = isMobileSafari ? '✅ Yes' : '❌ No';
+        document.getElementById('fullscreenSupport').textContent = supportsFullscreenAPI ? '✅ Supported' : '❌ Not Supported (will use CSS fallback)';
+        
+        // Toggle fullscreen function
+        function toggleTestFullscreen() {
+            const testArea = document.getElementById('testArea');
+            const btnText = document.getElementById('btnText');
+            
+            if (!testArea.classList.contains('is-ios-fullscreen')) {
+                // Enter fullscreen
+                if ((isIOSSafari || isMobileSafari || (isMobile && !supportsFullscreenAPI))) {
+                    // iOS fallback
+                    testArea.classList.add('is-ios-fullscreen');
+                    document.body.classList.add('ios-fullscreen-active');
+                    document.body.style.overflow = 'hidden';
+                    btnText.textContent = '✕ Exit Fullscreen';
+                    showStatus('📱 Entered iOS Fullscreen Mode (CSS Fallback)', false);
+                } else if (supportsFullscreenAPI) {
+                    // Native API
+                    if (testArea.requestFullscreen) {
+                        testArea.requestFullscreen();
+                    } else if (testArea.webkitRequestFullscreen) {
+                        testArea.webkitRequestFullscreen();
+                    } else if (testArea.mozRequestFullScreen) {
+                        testArea.mozRequestFullScreen();
+                    } else if (testArea.msRequestFullscreen) {
+                        testArea.msRequestFullscreen();
+                    }
+                    btnText.textContent = '✕ Exit Fullscreen';
+                    showStatus('🖥️ Entered Native Fullscreen Mode', false);
+                } else {
+                    // Fallback for unsupported browsers
+                    testArea.classList.add('is-ios-fullscreen');
+                    document.body.classList.add('ios-fullscreen-active');
+                    document.body.style.overflow = 'hidden';
+                    btnText.textContent = '✕ Exit Fullscreen';
+                    showStatus('📱 Entered CSS Fullscreen Mode (Fallback)', false);
+                }
+            } else {
+                // Exit fullscreen
+                exitTestFullscreen();
+            }
+        }
+        
+        function exitTestFullscreen() {
+            const testArea = document.getElementById('testArea');
+            const btnText = document.getElementById('btnText');
+            
+            testArea.classList.remove('is-ios-fullscreen');
+            document.body.classList.remove('ios-fullscreen-active');
+            document.body.style.overflow = '';
+            btnText.textContent = '🖼️ Enter Fullscreen';
+            showStatus('Exited Fullscreen Mode', false);
+        }
+        
+        // Listen for native fullscreen changes
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+        document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+        document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+        
+        function handleFullscreenChange() {
+            const btnText = document.getElementById('btnText');
+            const inFullscreen = !!(
+                document.fullscreenElement ||
+                document.webkitFullscreenElement ||
+                document.mozFullScreenElement ||
+                document.msFullscreenElement
+            );
+            
+            if (!inFullscreen) {
+                btnText.textContent = '🖼️ Enter Fullscreen';
+            }
+        }
+        
+        function showStatus(message, isError) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = 'status' + (isError ? ' error' : '');
+            status.style.display = 'block';
+            
+            setTimeout(() => {
+                status.style.display = 'none';
+            }, 3000);
+        }
+        
+        // Handle escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && testArea.classList.contains('is-ios-fullscreen')) {
+                exitTestFullscreen();
+            }
+        });
+    </script>
+</body>
+</html>
