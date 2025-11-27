@@ -1903,8 +1903,9 @@ body.is-admin .admin-only {
     display: inline-block;
 }
 
-/* Hide play/pause/rewind/forward for users in live mode */
-body.is-live-mode:not(.is-admin) .admin-control {
+/* Hide play/pause/rewind/forward and admin-only controls for users in live mode */
+body.is-live-mode:not(.is-admin) .admin-control,
+body.is-live-mode:not(.is-admin) .admin-only {
     display: none;
 }
 

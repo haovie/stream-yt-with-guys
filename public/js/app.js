@@ -12,6 +12,11 @@ let isLiveMode = false;
 let videoQueue = [];
 let adminId = null;
 
+// 🔥 ANTI-FEEDBACK LOOP: Variables to prevent infinite sync loops
+let lastSyncTimestamp = 0; // Timestamp of last received sync
+let syncDebounceTimeout = null; // Timeout for debouncing outgoing syncs
+let isReceivingSync = false; // Flag to indicate we're currently processing incoming sync
+
 // Emoji data
 const emojiData = {
     smileys: ['😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊', '😇', '🥰', '😍', '🤩', '😘', '😗', '😚', '😙', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫', '🤔', '🤐', '🤨', '😐', '😑', '😶', '😏', '😒', '🙄', '😬', '🤥', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧', '🥵', '🥶', '🥴', '😵', '🤯', '🤠', '🥳', '😎', '🤓', '🧐'],
@@ -460,6 +465,7 @@ function setupSocketListeners() {
     socket.on('admin-status', (data) => {
         adminId = data.adminId;
         isLiveMode = data.isLiveMode;
+        updateLiveModeUI(); // Cập nhật class is-live-mode cho body ngay lập tức
         updateAdminUI();
     });
 
@@ -500,17 +506,15 @@ function setupSocketListeners() {
     });
     
     socket.on('video-state-sync', (state) => {
-        if (!isSyncing) {
-            syncVideoState(state);
-        }
+        syncVideoState(state);
     });
 
     // ⚡ OPTIMIZED: Compact video sync handler
-    // Format: [state, time] where state: 0=paused, 1=playing, 2=buffering, 3=ended
+    // Format: [state, time, timestamp] where state: 0=paused, 1=playing, 2=buffering, 3=ended
     socket.on('vs', (data) => {
-        if (!isSyncing && player && isPlayerReady) {
-            const [state, time] = data;
-            syncVideoStateCompact(state, time);
+        if (player && isPlayerReady) {
+            const [state, time, timestamp] = data;
+            syncVideoStateCompact(state, time, timestamp);
         }
     });
 }
@@ -1099,6 +1103,12 @@ function initializeCustomControls() {
 function togglePlayPause() {
     if (!player || !isPlayerReady) return;
     
+    // 🔥 Block User interaction in Live Mode
+    if (isLiveMode && !isAdmin) {
+        console.log('🚫 User cannot control play/pause in Live Mode');
+        return;
+    }
+    
     const state = player.getPlayerState();
     if (state === YT.PlayerState.PLAYING) {
         player.pauseVideo();
@@ -1128,6 +1138,12 @@ function updatePlayPauseButton() {
 // 🎮 Seek relative (forward/backward)
 function seekRelative(seconds) {
     if (!player || !isPlayerReady) return;
+    
+    // 🔥 Block User interaction in Live Mode
+    if (isLiveMode && !isAdmin) {
+        console.log('🚫 User cannot seek in Live Mode');
+        return;
+    }
     
     const currentTime = player.getCurrentTime();
     const duration = player.getDuration();
@@ -1257,6 +1273,12 @@ function stopSeeking() {
 function handleProgressClick(e) {
     if (!player || !isPlayerReady || !progressBar) return;
     
+    // 🔥 Block User interaction in Live Mode
+    if (isLiveMode && !isAdmin) {
+        console.log('🚫 User cannot seek via progress bar in Live Mode');
+        return;
+    }
+    
     const rect = progressBar.getBoundingClientRect();
     const pos = (e.clientX - rect.left) / rect.width;
     const duration = player.getDuration();
@@ -1302,6 +1324,14 @@ function formatTime(seconds) {
 // 🎮 Handle video click (click anywhere on video to play/pause)
 function handleVideoClick(e) {
     e.stopPropagation();
+    
+    // 🔥 Block User interaction in Live Mode
+    if (isLiveMode && !isAdmin) {
+        console.log('🚫 User cannot click video in Live Mode');
+        showNotification('Chỉ Admin mới có thể điều khiển video trong Live Mode', 'warning');
+        return;
+    }
+    
     togglePlayPause();
     
     // Show click animation
@@ -2235,50 +2265,73 @@ function updateVideoTitle() {
 
 // Player state change callback
 function onPlayerStateChange(event) {
-    if (!isPlayerReady || isSyncing) return;
+    if (!isPlayerReady) return;
+    
+    // 🔥 ANTI-FEEDBACK LOOP: Ignore events triggered by incoming syncs
+    if (isReceivingSync || isSyncing) {
+        console.log('🔄 Ignoring state change (receiving sync)');
+        return;
+    }
     
     // 🎮 Update video title and load quality/captions when video starts playing
-    // This is a backup check when metadata is definitely available
     if (event.data === YT.PlayerState.PLAYING) {
-        // Update title if not set
         if (videoTitle && videoTitle.textContent === 'Đang tải...') {
             updateVideoTitle();
         }
-        
-        // Load quality levels if not loaded yet
         if (availableQualities.length === 0) {
-            setTimeout(() => {
-                loadAvailableQualities();
-            }, 500);
+            setTimeout(() => loadAvailableQualities(), 500);
         }
-        
-        // Load captions if not loaded yet
         if (availableCaptions.length === 0) {
-            setTimeout(() => {
-                loadAvailableCaptions();
-            }, 1000);
+            setTimeout(() => loadAvailableCaptions(), 1000);
         }
     }
     
-    // Chỉ admin mới được emit state change trong live mode
-    if (isLiveMode && !isAdmin) {
-        return; // User thường không được điều khiển
+    // 🔥 MODE 1: Live Mode ON - Only Admin can send commands
+    if (isLiveMode) {
+        if (!isAdmin) {
+            // User cannot control in Live Mode - ignore all local interactions
+            console.log('🚫 User blocked in Live Mode');
+            return;
+        }
+        // Admin can send commands immediately (no debounce in Live Mode)
+        console.log('👑 Admin sending command in Live Mode');
+        emitVideoStateChange(event.data);
+        return;
     }
+    
+    // 🔥 MODE 2: Live Mode OFF (Party Mode) - Everyone can control, but with debounce
+    // Debounce to prevent rapid-fire events causing feedback loops
+    if (syncDebounceTimeout) {
+        clearTimeout(syncDebounceTimeout);
+    }
+    
+    syncDebounceTimeout = setTimeout(() => {
+        // Check again if we're not receiving sync (could have changed during debounce)
+        if (!isReceivingSync && !isSyncing) {
+            console.log('🎉 Party Mode: Sending state change');
+            emitVideoStateChange(event.data);
+        }
+    }, 300); // 300ms debounce
+}
+
+// 🔥 Helper function to emit video state change
+function emitVideoStateChange(playerState) {
+    if (!player || !isPlayerReady) return;
     
     const state = {
-        isPlaying: event.data === YT.PlayerState.PLAYING,
+        isPlaying: playerState === YT.PlayerState.PLAYING,
         currentTime: player.getCurrentTime(),
-        playerState: event.data
+        playerState: playerState,
+        timestamp: Date.now() // Add timestamp for tracking
     };
     
-    // Emit state change to other users (legacy)
+    // Emit legacy format
     socket.emit('video-state-change', {
         state: state,
         roomId: currentRoom
     });
 
-    // ⚡ OPTIMIZED: Also emit compact format
-    // Map YT states to compact: 0=paused, 1=playing, 2=buffering, 3=ended
+    // ⚡ Emit compact format
     const stateMap = {
         [YT.PlayerState.ENDED]: 3,
         [YT.PlayerState.PLAYING]: 1,
@@ -2286,107 +2339,171 @@ function onPlayerStateChange(event) {
         [YT.PlayerState.BUFFERING]: 2,
         [YT.PlayerState.CUED]: 0
     };
-    const compactState = stateMap[event.data] !== undefined ? stateMap[event.data] : 0;
-    const currentTime = Math.floor(player.getCurrentTime() * 10) / 10; // Round to 1 decimal
+    const compactState = stateMap[playerState] !== undefined ? stateMap[playerState] : 0;
+    const currentTime = Math.floor(player.getCurrentTime() * 10) / 10;
     
-    // Send compact format (no volatile here, only on server side)
-    socket.emit('vs', [compactState, currentTime]);
+    socket.emit('vs', [compactState, currentTime, Date.now()]);
+    
+    console.log('📤 Sent:', compactState === 1 ? 'PLAY' : 'PAUSE', 'at', currentTime);
 }
 
 // ⚡ OPTIMIZED: Sync video state from compact format
-// Format: [state, time] where state: 0=paused, 1=playing, 2=buffering, 3=ended
-function syncVideoStateCompact(state, time) {
+// Format: [state, time, timestamp] where state: 0=paused, 1=playing, 2=buffering, 3=ended
+function syncVideoStateCompact(state, time, timestamp) {
     if (!player || !isPlayerReady) return;
     
-    // In live mode, users cannot control
-    if (isLiveMode && !isAdmin) {
-        isSyncing = true;
+    // 🔥 ANTI-FEEDBACK LOOP: Check if this sync is too recent (ignore duplicates)
+    const now = Date.now();
+    if (timestamp && Math.abs(now - timestamp) > 5000) {
+        // Ignore syncs older than 5 seconds (stale data)
+        console.log('⏰ Ignoring stale sync:', (now - timestamp) / 1000, 'seconds old');
+        return;
+    }
+    
+    // 🔥 ANTI-FEEDBACK LOOP: Prevent rapid successive syncs
+    if (now - lastSyncTimestamp < 200) {
+        console.log('⚡ Ignoring rapid sync (< 200ms)');
+        return;
+    }
+    lastSyncTimestamp = now;
+    
+    // 🔥 Set flags to prevent feedback loop
+    isReceivingSync = true;
+    isSyncing = true;
+    
+    console.log('📥 Received:', state === 1 ? 'PLAY' : 'PAUSE', 'at', time);
+    
+    try {
+        const currentTime = player.getCurrentTime();
+        const currentState = player.getPlayerState();
+        const timeDiff = Math.abs(currentTime - time);
         
-        try {
-            const currentTime = player.getCurrentTime();
-            const timeDiff = Math.abs(currentTime - time);
+        // 🔥 MODE 1: Live Mode - Users must follow Admin strictly
+        if (isLiveMode && !isAdmin) {
+            console.log('👥 User syncing to Admin');
             
-            // Sync time if difference > 1 second
-            if (timeDiff > 1) {
+            // Sync time if difference > 0.5 second (strict sync in Live Mode)
+            if (timeDiff > 0.5) {
                 player.seekTo(time, true);
             }
             
             // Sync play state
-            const currentState = player.getPlayerState();
             if (state === 1 && currentState !== YT.PlayerState.PLAYING) {
                 player.playVideo();
             } else if (state === 0 && currentState === YT.PlayerState.PLAYING) {
                 player.pauseVideo();
             }
-        } catch (error) {
-            console.error('Sync error:', error);
-        } finally {
-            setTimeout(() => { isSyncing = false; }, 500);
-        }
-    }
-}
-
-// Sync video state
-function syncVideoState(state) {
-    if (!player || !isPlayerReady) return;
-    
-    // Trong live mode, user không được điều khiển
-    if (isLiveMode && !isAdmin) {
-        isSyncing = true;
-        
-        try {
-            const currentTime = player.getCurrentTime();
-            const timeDiff = Math.abs(currentTime - state.currentTime);
             
-            // Force sync nếu là admin control hoặc time diff > 1 giây
-            if (state.forceSync || state.adminControl || timeDiff > 1) {
-                player.seekTo(state.currentTime, true);
+            showSyncIndicator();
+        }
+        
+        // 🔥 MODE 2: Party Mode - Gentle sync (only if significantly different)
+        else if (!isLiveMode) {
+            console.log('🎉 Party Mode: Gentle sync');
+            
+            // Sync time only if difference > 2 seconds (more tolerant in Party Mode)
+            if (timeDiff > 2) {
+                player.seekTo(time, true);
             }
             
-            // Sync play/pause state ngay lập tức
-            if (state.isPlaying && player.getPlayerState() !== YT.PlayerState.PLAYING) {
+            // Sync play state
+            if (state === 1 && currentState !== YT.PlayerState.PLAYING) {
                 player.playVideo();
-            } else if (!state.isPlaying && player.getPlayerState() === YT.PlayerState.PLAYING) {
+            } else if (state === 0 && currentState === YT.PlayerState.PLAYING) {
                 player.pauseVideo();
             }
-            
-            // Hiển thị sync indicator
-            showSyncIndicator();
-            
-        } catch (error) {
-            console.error('Lỗi đồng bộ video:', error);
         }
+        
+    } catch (error) {
+        console.error('❌ Sync error:', error);
+    } finally {
+        // 🔥 CRITICAL: Clear flags after a delay to allow player state to settle
+        setTimeout(() => {
+            isReceivingSync = false;
+        }, 500);
         
         setTimeout(() => {
             isSyncing = false;
-        }, 500); // Giảm thời gian sync
+        }, 800);
+    }
+}
+
+// Sync video state (Legacy format - for backward compatibility)
+function syncVideoState(state) {
+    if (!player || !isPlayerReady) return;
+    
+    // 🔥 ANTI-FEEDBACK LOOP: Check timestamp if available
+    const now = Date.now();
+    if (state.timestamp) {
+        if (Math.abs(now - state.timestamp) > 5000) {
+            console.log('⏰ Ignoring stale legacy sync');
+            return;
+        }
+        if (now - lastSyncTimestamp < 200) {
+            console.log('⚡ Ignoring rapid legacy sync');
+            return;
+        }
+        lastSyncTimestamp = now;
+    }
+    
+    // 🔥 Set flags to prevent feedback loop
+    isReceivingSync = true;
+    isSyncing = true;
+    
+    console.log('📥 Received (legacy):', state.isPlaying ? 'PLAY' : 'PAUSE', 'at', state.currentTime);
+    
+    try {
+        const currentTime = player.getCurrentTime();
+        const currentState = player.getPlayerState();
+        const timeDiff = Math.abs(currentTime - state.currentTime);
         
-    } else {
-        // Chế độ bình thường
-        isSyncing = true;
-        
-        try {
-            const currentTime = player.getCurrentTime();
-            const timeDiff = Math.abs(currentTime - state.currentTime);
+        // 🔥 MODE 1: Live Mode - Users must follow Admin strictly
+        if (isLiveMode && !isAdmin) {
+            console.log('👥 User syncing to Admin (legacy)');
             
-            // Sync time if difference is more than 2 seconds
+            // Strict sync in Live Mode
+            if (state.forceSync || state.adminControl || timeDiff > 0.5) {
+                player.seekTo(state.currentTime, true);
+            }
+            
+            // Sync play/pause state
+            if (state.isPlaying && currentState !== YT.PlayerState.PLAYING) {
+                player.playVideo();
+            } else if (!state.isPlaying && currentState === YT.PlayerState.PLAYING) {
+                player.pauseVideo();
+            }
+            
+            showSyncIndicator();
+        }
+        
+        // 🔥 MODE 2: Party Mode - Gentle sync
+        else if (!isLiveMode) {
+            console.log('🎉 Party Mode: Gentle sync (legacy)');
+            
+            // Gentle sync - only if difference > 2 seconds
             if (timeDiff > 2) {
                 player.seekTo(state.currentTime, true);
             }
             
             // Sync play/pause state
-            if (state.isPlaying && player.getPlayerState() !== YT.PlayerState.PLAYING) {
+            if (state.isPlaying && currentState !== YT.PlayerState.PLAYING) {
                 player.playVideo();
-            } else if (!state.isPlaying && player.getPlayerState() === YT.PlayerState.PLAYING) {
+            } else if (!state.isPlaying && currentState === YT.PlayerState.PLAYING) {
                 player.pauseVideo();
             }
-        } catch (error) {
-            console.error('Lỗi đồng bộ video:', error);
         }
+        
+    } catch (error) {
+        console.error('❌ Sync error (legacy):', error);
+    } finally {
+        // 🔥 CRITICAL: Clear flags after a delay
+        setTimeout(() => {
+            isReceivingSync = false;
+        }, 500);
         
         setTimeout(() => {
             isSyncing = false;
-        }, 1000);
+        }, 800);
     }
 }
 
