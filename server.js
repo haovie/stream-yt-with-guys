@@ -35,6 +35,67 @@ const privateMessages = new Map(); // userId -> messages
 // Admin configuration
 const ADMIN_PASSWORD = 'admin123'; // Có thể thay đổi
 
+// ============================================================================
+// 🚀 SERVER-SIDE VIDEO SYNC STATE MANAGER (Source of Truth)
+// ============================================================================
+class ServerVideoStateManager {
+    constructor() {
+        this.roomStates = new Map();
+    }
+    
+    initializeRoom(roomId) {
+        if (!this.roomStates.has(roomId)) {
+            this.roomStates.set(roomId, {
+                isPlaying: false,
+                currentTime: 0,
+                lastUpdate: Date.now(),
+                playbackRate: 1,
+                videoId: null,
+                lastController: null
+            });
+        }
+        return this.roomStates.get(roomId);
+    }
+    
+    updateState(roomId, state, socketId) {
+        const roomState = this.roomStates.get(roomId);
+        if (!roomState) return null;
+        
+        const updatedState = {
+            ...roomState,
+            ...state,
+            lastUpdate: Date.now(),
+            lastController: socketId
+        };
+        
+        this.roomStates.set(roomId, updatedState);
+        return updatedState;
+    }
+    
+    getCurrentState(roomId) {
+        const state = this.roomStates.get(roomId);
+        if (!state) return null;
+        
+        // Time prediction for accurate sync
+        if (state.isPlaying) {
+            const timeSinceUpdate = (Date.now() - state.lastUpdate) / 1000;
+            return {
+                ...state,
+                currentTime: state.currentTime + (timeSinceUpdate * (state.playbackRate || 1)),
+                lastUpdate: Date.now()
+            };
+        }
+        
+        return state;
+    }
+    
+    deleteRoom(roomId) {
+        this.roomStates.delete(roomId);
+    }
+}
+
+const serverStateManager = new ServerVideoStateManager();
+
 // Route chính
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -42,7 +103,6 @@ app.get('/', (req, res) => {
 
 // Socket.IO xử lý kết nối
 io.on('connection', (socket) => {
-  console.log('Người dùng kết nối:', socket.id);
 
   // Tham gia phòng
   socket.on('join-room', (data) => {
@@ -110,6 +170,16 @@ io.on('connection', (socket) => {
       message: joinMessage
     });
 
+    // ✅ Initialize server state manager
+    serverStateManager.initializeRoom(roomId);
+    const currentState = serverStateManager.getCurrentState(roomId);
+    if (currentState && currentState.videoId) {
+      socket.emit('video-loaded', {
+        videoId: currentState.videoId,
+        state: currentState
+      });
+    }
+    
     // Gửi thông tin phòng cho user mới
     socket.emit('room-info', {
       isAdmin: socket.isAdmin,
@@ -127,7 +197,6 @@ io.on('connection', (socket) => {
       isLiveMode: room.isLiveMode
     });
 
-    console.log(`${socket.isAdmin ? '👑 Admin' : ''} ${username} tham gia phòng ${roomId}`);
   });
 
   // Xử lý tin nhắn chat
@@ -143,7 +212,6 @@ io.on('connection', (socket) => {
     };
     
     io.to(roomId).emit('chat-message', chatData);
-    console.log(`Chat trong phòng ${roomId}: ${socket.username}: ${message}`);
   });
 
   // ⚡ OPTIMIZED: Compact chat message (cm = chat-message)
@@ -161,7 +229,6 @@ io.on('connection', (socket) => {
     };
     
     io.to(socket.roomId).emit('chat-message', chatData);
-    console.log(`Chat trong phòng ${socket.roomId}: ${socket.username}: ${message}`);
   });
 
   // Xử lý tin nhắn riêng
@@ -187,8 +254,6 @@ io.on('connection', (socket) => {
         to: targetSocket.username,
         toId: targetUserId
       });
-      
-      console.log(`Private message: ${socket.username} -> ${targetSocket.username}: ${message}`);
     }
   });
 
@@ -211,7 +276,6 @@ io.on('connection', (socket) => {
     };
     
     io.to(roomId).emit('chat-message', fileMessage);
-    console.log(`File shared trong phòng ${roomId}: ${socket.username} - ${fileName}`);
   });
 
   // Lấy danh sách người dùng
@@ -335,7 +399,9 @@ io.on('connection', (socket) => {
     const { state, roomId } = data;
     const room = rooms.get(roomId);
     
-    if (room && room.isLiveMode) {
+    if (!room) return;
+    
+    if (room.isLiveMode) {
       // Chỉ admin mới có thể điều khiển video trong live mode
       if (socket.isAdmin && room.adminId === socket.id) {
         room.videoState = {
@@ -344,12 +410,17 @@ io.on('connection', (socket) => {
           adminId: socket.id
         };
         
+        // ✅ Update server state manager
+        const updatedState = serverStateManager.updateState(roomId, state, socket.id);
+        
         // Gửi trạng thái đến tất cả người dùng khác với force sync
-        socket.to(roomId).emit('video-state-sync', {
-          ...state,
-          forceSync: true,
-          adminControl: true
-        });
+        if (updatedState) {
+          socket.to(roomId).emit('video-state-sync', {
+            ...updatedState,
+            forceSync: true,
+            adminControl: true
+          });
+        }
       }
     } else {
       // Chế độ bình thường - ai cũng có thể điều khiển
@@ -358,7 +429,22 @@ io.on('connection', (socket) => {
         lastUpdate: Date.now()
       };
       
-      socket.to(roomId).emit('video-state-sync', state);
+      // ✅ Update server state manager
+      const updatedState = serverStateManager.updateState(roomId, state, socket.id);
+      
+      if (updatedState) {
+        socket.to(roomId).emit('video-state-sync', updatedState);
+      }
+    }
+  });
+  
+  // ✅ NEW: Handle sync requests from clients (drift correction)
+  socket.on('request-sync', (data) => {
+    const { roomId } = data;
+    const currentState = serverStateManager.getCurrentState(roomId);
+    
+    if (currentState) {
+      socket.emit('sync-response', currentState);
     }
   });
 
@@ -449,7 +535,6 @@ io.on('connection', (socket) => {
         
         if (isAdminLeaving) {
           // Admin đã rời khỏi phòng - đưa tất cả user về trang chủ
-          console.log(`👑 Admin ${socket.username} đã rời khỏi phòng ${socket.roomId} - chuyển hướng tất cả user về trang chủ`);
           
           // Gửi thông báo đến tất cả user còn lại trong phòng
           socket.to(socket.roomId).emit('admin-left-room', {
@@ -483,6 +568,7 @@ io.on('connection', (socket) => {
           // Xóa phòng nếu không còn ai
           if (room.users.size === 0) {
             rooms.delete(socket.roomId);
+            serverStateManager.deleteRoom(socket.roomId); // ✅ Cleanup server state
           }
         }
       }
@@ -490,8 +576,6 @@ io.on('connection', (socket) => {
       // Xóa thông tin user
       users.delete(socket.id);
     }
-    
-    console.log('Người dùng ngắt kết nối:', socket.id);
   });
 });
 
