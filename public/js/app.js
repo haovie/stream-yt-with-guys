@@ -12,6 +12,37 @@ let isLiveMode = false;
 let videoQueue = [];
 let adminId = null;
 
+// ============================================================================
+// 🕐 TIMESTAMP UTILITY
+// ============================================================================
+function getFormattedTime() {
+    return new Date().toLocaleTimeString('vi-VN');
+}
+
+// ============================================================================
+// 🎨 USER COLOR GENERATOR - Generate unique colors for each user
+// ============================================================================
+function getUserColor(username) {
+    // Hash function to generate consistent number from username
+    let hash = 0;
+    for (let i = 0; i < username.length; i++) {
+        hash = username.charCodeAt(i) + ((hash << 5) - hash);
+        hash = hash & hash; // Convert to 32bit integer
+    }
+    
+    // Generate HSL color with good saturation and lightness
+    const hue = Math.abs(hash % 360); // 0-359 degrees
+    const saturation = 65 + (Math.abs(hash) % 20); // 65-85%
+    const lightness = 55 + (Math.abs(hash >> 8) % 15); // 55-70%
+    
+    return {
+        hue: hue,
+        primary: `hsl(${hue}, ${saturation}%, ${lightness}%)`,
+        background: `hsla(${hue}, ${saturation}%, ${lightness}%, 0.25)`,
+        border: `hsla(${hue}, ${saturation}%, ${lightness}%, 0.4)`
+    };
+}
+
 // 🔥 ANTI-FEEDBACK LOOP: Variables to prevent infinite sync loops
 let lastSyncTimestamp = 0; // Timestamp of last received sync
 let syncDebounceTimeout = null; // Timeout for debouncing outgoing syncs
@@ -1000,7 +1031,7 @@ function displaySystemMessage(message) {
     displayMessage({
         username: 'Hệ thống',
         message: message,
-        timestamp: new Date().toLocaleTimeString('vi-VN'),
+        timestamp: getFormattedTime(),
         isSystem: true
     });
 }
@@ -1024,15 +1055,33 @@ function displayOverlayMessage(data) {
     
     messageDiv.className = messageClass;
     
-    // Create message content
+    // Get timestamp - use data.timestamp if available, otherwise generate new one
+    const timestamp = data.timestamp || getFormattedTime();
+    
+    // 🎨 Generate unique color for each user (not for own messages or system)
+    if (!data.isSystem && data.username !== currentUser) {
+        const userColor = getUserColor(data.username);
+        messageDiv.style.background = userColor.background;
+        messageDiv.style.borderColor = userColor.border;
+        messageDiv.style.border = `1px solid ${userColor.border}`;
+    }
+    
+    // Create message content with timestamp
     if (data.isSystem) {
         messageDiv.innerHTML = `
             <span class="chat-overlay-message-content">${escapeHtml(data.message)}</span>
+            <span class="chat-overlay-message-timestamp">${timestamp}</span>
         `;
     } else {
+        // 🎨 Apply username color
+        const userColor = !data.isSystem && data.username !== currentUser ? getUserColor(data.username) : null;
+        const usernameColor = userColor ? userColor.primary : '';
+        const usernameStyle = usernameColor ? `style="color: ${usernameColor};"` : '';
+        
         messageDiv.innerHTML = `
-            <span class="chat-overlay-message-username">${escapeHtml(data.username)}:</span>
+            <span class="chat-overlay-message-username" ${usernameStyle}>${escapeHtml(data.username)}:</span>
             <span class="chat-overlay-message-content">${escapeHtml(data.message)}</span>
+            <span class="chat-overlay-message-timestamp">${timestamp}</span>
         `;
     }
     
@@ -2089,7 +2138,7 @@ function setPlaybackSpeed(speed) {
         }
         
     } catch (error) {
-        console.error('Failed to set playback speed:', error);
+        console.error(`[${getFormattedTime()}] Failed to set playback speed:`, error);
     }
 }
 
@@ -3043,7 +3092,7 @@ function syncVideoStateCompact(state, time, timestamp) {
         }
         
     } catch (error) {
-        console.error('❌ Sync error:', error);
+        console.error(`[${getFormattedTime()}] ❌ Sync error:`, error);
     } finally {
         // 🔥 CRITICAL: Clear flags after a delay to allow player state to settle
         setTimeout(() => {
@@ -3115,7 +3164,7 @@ function syncVideoState(state) {
         }
         
     } catch (error) {
-        console.error('❌ Sync error (legacy):', error);
+        console.error(`[${getFormattedTime()}] ❌ Sync error (legacy):`, error);
     } finally {
         // 🔥 CRITICAL: Clear flags after a delay
         setTimeout(() => {

@@ -36,6 +36,13 @@ const privateMessages = new Map(); // userId -> messages
 const ADMIN_PASSWORD = 'admin123'; // Có thể thay đổi
 
 // ============================================================================
+// 🕐 TIMESTAMP UTILITY
+// ============================================================================
+function getFormattedTime() {
+    return new Date().toLocaleTimeString('vi-VN');
+}
+
+// ============================================================================
 // 🚀 SERVER-SIDE VIDEO SYNC STATE MANAGER (Source of Truth)
 // ============================================================================
 class ServerVideoStateManager {
@@ -207,7 +214,7 @@ io.on('connection', (socket) => {
       username: socket.username,
       message: message,
       messageType: messageType,
-      timestamp: new Date().toLocaleTimeString('vi-VN'),
+      timestamp: getFormattedTime(),
       userId: socket.id
     };
     
@@ -224,7 +231,7 @@ io.on('connection', (socket) => {
       username: socket.username,
       message: message,
       messageType: type === 0 ? 'text' : (type === 1 ? 'file' : 'system'),
-      timestamp: new Date().toLocaleTimeString('vi-VN'),
+      timestamp: getFormattedTime(),
       userId: socket.id
     };
     
@@ -242,7 +249,7 @@ io.on('connection', (socket) => {
         from: socket.username,
         fromId: socket.id,
         message: message,
-        timestamp: new Date().toLocaleTimeString('vi-VN'),
+        timestamp: getFormattedTime(),
         isPrivate: true
       };
       
@@ -271,7 +278,7 @@ io.on('connection', (socket) => {
         type: fileType,
         data: fileData
       },
-      timestamp: new Date().toLocaleTimeString('vi-VN'),
+      timestamp: getFormattedTime(),
       userId: socket.id
     };
     
@@ -309,7 +316,7 @@ io.on('connection', (socket) => {
         io.to(roomId).emit('chat-message', {
           username: 'Hệ thống',
           message: `👑 Admin ${socket.username} đã phát video: ${videoTitle || 'Video mới'}`,
-          timestamp: new Date().toLocaleTimeString('vi-VN'),
+          timestamp: getFormattedTime(),
           isSystem: true
         });
       } else {
@@ -319,7 +326,7 @@ io.on('connection', (socket) => {
           videoId: videoId,
           title: videoTitle || 'Video không có tiêu đề',
           requestedBy: socket.username,
-          requestedAt: new Date().toLocaleTimeString('vi-VN')
+          requestedAt: getFormattedTime()
         };
         
         room.videoQueue.push(queueItem);
@@ -331,7 +338,7 @@ io.on('connection', (socket) => {
         io.to(roomId).emit('chat-message', {
           username: 'Hệ thống',
           message: `📋 ${socket.username} đã thêm video vào hàng đợi: ${videoTitle || 'Video mới'}`,
-          timestamp: new Date().toLocaleTimeString('vi-VN'),
+          timestamp: getFormattedTime(),
           isSystem: true
         });
       }
@@ -366,7 +373,7 @@ io.on('connection', (socket) => {
         io.to(roomId).emit('chat-message', {
           username: 'Hệ thống',
           message: `👑 Admin đã phát video từ hàng đợi: ${queueItem.title} (yêu cầu bởi ${queueItem.requestedBy})`,
-          timestamp: new Date().toLocaleTimeString('vi-VN'),
+          timestamp: getFormattedTime(),
           isSystem: true
         });
       }
@@ -387,7 +394,7 @@ io.on('connection', (socket) => {
         io.to(roomId).emit('chat-message', {
           username: 'Hệ thống',
           message: `👑 Admin đã xóa video khỏi hàng đợi: ${removedItem.title}`,
-          timestamp: new Date().toLocaleTimeString('vi-VN'),
+          timestamp: getFormattedTime(),
           isSystem: true
         });
       }
@@ -517,7 +524,7 @@ io.on('connection', (socket) => {
       io.to(roomId).emit('chat-message', {
         username: 'Hệ thống',
         message: `👑 Admin đã ${modeText} chế độ phát trực tiếp`,
-        timestamp: new Date().toLocaleTimeString('vi-VN'),
+        timestamp: getFormattedTime(),
         isSystem: true
       });
     }

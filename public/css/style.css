@@ -1250,7 +1250,7 @@ body.ios-fullscreen-active {
     display: none;
 }
 
-/* Chat overlay messages container - TikTok Style */
+/* Chat overlay messages container - Modern TikTok Style */
 .chat-overlay-messages {
     position: relative;
     display: flex;
@@ -1258,14 +1258,17 @@ body.ios-fullscreen-active {
     /* ❌ REMOVED: justify-content: flex-end; - This prevents scrolling! */
     overflow-y: auto;
     overflow-x: hidden;
-    max-height: 30vh;
-    min-height: 30vh;
-    padding: 10px 5px;
+    max-height: 35vh;
+    min-height: 35vh;
+    padding: 12px 8px;
     pointer-events: auto;
     
     /* 🎨 Hide scrollbar but keep scrollable */
     scrollbar-width: none; /* Firefox */
     -ms-overflow-style: none; /* IE/Edge */
+    
+    /* Smooth scrolling */
+    scroll-behavior: smooth;
 }
 
 .chat-overlay-messages::-webkit-scrollbar {
@@ -1274,11 +1277,11 @@ body.ios-fullscreen-active {
 
 /* 🎨 TikTok Style: Fade out effect at top (mask gradient) */
 .chat-overlay-messages.idle {
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 20%, black 100%);
-    mask-image: linear-gradient(to bottom, transparent 0%, black 20%, black 100%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 100%);
+    mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 100%);
 }
 
-/* 🎨 When scrolling: Show full messages without background */
+/* 🎨 When scrolling: Show full messages without fade */
 .chat-overlay-messages.scrolling {
     -webkit-mask-image: none;
     mask-image: none;
@@ -1286,97 +1289,101 @@ body.ios-fullscreen-active {
 
 /* ❌ REMOVED: No hover effect - only scrolling state */
 
-/* Individual overlay message - TikTok Style */
+/* Individual overlay message - Modern TikTok Style with semi-transparent background */
 .chat-overlay-message {
-    background: transparent;
+    background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     color: white;
-    padding: 8px 12px;
-    border-radius: 4px;
-    margin-bottom: 6px;
-    max-width: 100%;
+    padding: 10px 14px;
+    border-radius: 20px;
+    margin-bottom: 8px;
+    max-width: 85%;
     word-wrap: break-word;
-    animation: slideUpFadeIn 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    animation: slideUpFadeIn 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);
     pointer-events: auto;
     align-self: flex-start;
-    line-height: 1.4;
+    line-height: 1.5;
     
-    /* 🎨 TikTok Style: Bold white text with strong black outline */
-    font-weight: 700;
+    /* 🎨 Modern clean font with subtle shadow */
+    font-weight: 600;
     font-size: 14px;
-    text-shadow: 
-        -2px -2px 0 #000,
-        2px -2px 0 #000,
-        -2px 2px 0 #000,
-        2px 2px 0 #000,
-        0 0 8px rgba(0, 0, 0, 0.9),
-        0 0 12px rgba(0, 0, 0, 0.7);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
     
-    /* Alternative: Use text-stroke for cleaner outline (WebKit) */
-    -webkit-text-stroke: 1.5px black;
-    text-stroke: 1.5px black;
-    paint-order: stroke fill;
+    /* Smooth transitions */
+    transition: all 0.2s ease;
+    
+    /* Better text rendering */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
-/* Own message styling - TikTok Style */
+/* Own message styling - Modern TikTok Style (aligned right) */
 .chat-overlay-message.own {
-    background: transparent;
-    align-self: flex-start; /* Keep same alignment as TikTok */
-    animation: slideUpFadeIn 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    background: rgba(79, 195, 247, 0.25);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(79, 195, 247, 0.3);
+    align-self: flex-end;
+    animation: slideUpFadeIn 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 .chat-overlay-message.own .chat-overlay-message-username {
     color: #4fc3f7; /* Light blue for own username */
 }
 
-/* System message styling - TikTok Style */
+/* System message styling - Simple and readable in all conditions */
 .chat-overlay-message.system {
-    background: rgba(255, 193, 7, 0.3);
-    backdrop-filter: blur(5px);
-    -webkit-backdrop-filter: blur(5px);
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border: none;
     color: #ffd700;
+    /* 🎨 Strong text shadow for readability on any background */
     text-shadow: 
-        -2px -2px 0 #000,
-        2px -2px 0 #000,
-        -2px 2px 0 #000,
-        2px 2px 0 #000,
-        0 0 8px rgba(0, 0, 0, 0.9);
-    -webkit-text-stroke: 1.5px black;
-    text-stroke: 1.5px black;
+        -1px -1px 0 #000,
+        1px -1px 0 #000,
+        -1px 1px 0 #000,
+        1px 1px 0 #000,
+        0 0 8px rgba(0, 0, 0, 0.9),
+        0 0 16px rgba(0, 0, 0, 0.8);
     font-style: italic;
-    align-self: flex-start;
+    align-self: center;
     font-size: 13px;
-    padding: 6px 10px;
+    font-weight: 600;
+    padding: 4px 8px;
+    text-align: center;
+    max-width: 90%;
 }
 
 .chat-overlay-message-username {
-    font-weight: 800;
+    font-weight: 700;
     font-size: 14px;
-    margin-right: 4px;
-    color: #ff6b9d; /* TikTok pink for usernames */
+    margin-right: 6px;
+    color: #ff6b9d; /* Default color - will be overridden by inline style for each user */
     display: inline;
-    text-shadow: 
-        -2px -2px 0 #000,
-        2px -2px 0 #000,
-        -2px 2px 0 #000,
-        2px 2px 0 #000,
-        0 0 8px rgba(0, 0, 0, 0.9);
-    -webkit-text-stroke: 1.5px black;
-    text-stroke: 1.5px black;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
 }
 
 .chat-overlay-message-content {
     font-size: 14px;
     display: inline;
     color: white;
-    font-weight: 700;
-    text-shadow: 
-        -2px -2px 0 #000,
-        2px -2px 0 #000,
-        -2px 2px 0 #000,
-        2px 2px 0 #000,
-        0 0 8px rgba(0, 0, 0, 0.9);
-    -webkit-text-stroke: 1.5px black;
-    text-stroke: 1.5px black;
+    font-weight: 500;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+    line-height: 1.5;
+}
+
+/* 🕐 Timestamp styling - subtle and muted */
+.chat-overlay-message-timestamp {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.6);
+    margin-left: 8px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+    opacity: 0.75;
+    font-style: normal;
 }
 
 /* Input wrapper (contains picker and input container) */
@@ -1675,6 +1682,11 @@ body.ios-fullscreen-active {
         font-size: 0.9em;
     }
     
+    .chat-overlay-message-timestamp {
+        font-size: 10px;
+        margin-left: 6px;
+    }
+    
     .chat-overlay-input-container {
         padding: 8px;
     }
@@ -1880,6 +1892,7 @@ body.ios-fullscreen-active {
     outline: none;
     cursor: pointer;
     -webkit-appearance: none;
+    appearance: none;
 }
 
 .volume-slider::-webkit-slider-thumb {
