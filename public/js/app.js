@@ -186,8 +186,8 @@ class ClientVideoSyncController {
                 currentTime: currentTime,
                 playerState: state,
                 timestamp: Date.now(),
-                playbackRate: this.player.getPlaybackRate(),
-                quality: this.player.getPlaybackQuality() // ✅ Include quality
+                playbackRate: this.player.getPlaybackRate()
+                // quality: Removed - deprecated API method
             };
             
             this.socket.emit('video-state-change', {
@@ -215,17 +215,8 @@ class ClientVideoSyncController {
             updatePlayPauseButton();
         }
         
-        // ✅ Sync quality if provided and different from current
-        if (state.quality) {
-            const currentQuality = this.player.getPlaybackQuality();
-            if (currentQuality !== state.quality && state.quality !== 'auto') {
-                this.player.setPlaybackQuality(state.quality);
-                // Update UI if setVideoQuality function exists
-                if (typeof setVideoQuality === 'function') {
-                    setTimeout(() => setVideoQuality(state.quality), 500);
-                }
-            }
-        }
+        // Quality sync removed - deprecated API methods
+        // YouTube now automatically manages quality
         
         const drift = this.stateManager.calculateDrift(currentTime);
         
@@ -306,8 +297,8 @@ class ClientVideoSyncController {
             currentTime: currentTime,
             playerState: YT.PlayerState.PLAYING,
             timestamp: Date.now(),
-            playbackRate: this.player.getPlaybackRate(),
-            quality: this.player.getPlaybackQuality()
+            playbackRate: this.player.getPlaybackRate()
+            // quality: Removed - deprecated API method
         };
         
         this.socket.emit('video-state-change', {
@@ -339,8 +330,8 @@ class ClientVideoSyncController {
             currentTime: currentTime,
             playerState: YT.PlayerState.PAUSED,
             timestamp: Date.now(),
-            playbackRate: this.player.getPlaybackRate(),
-            quality: this.player.getPlaybackQuality()
+            playbackRate: this.player.getPlaybackRate()
+            // quality: Removed - deprecated API method
         };
         
         this.socket.emit('video-state-change', {
@@ -382,8 +373,8 @@ class ClientVideoSyncController {
             currentTime: newTime,
             playerState: currentState,
             timestamp: Date.now(),
-            playbackRate: this.player.getPlaybackRate(),
-            quality: this.player.getPlaybackQuality()
+            playbackRate: this.player.getPlaybackRate()
+            // quality: Removed - deprecated API method
         };
         
         this.socket.emit('video-state-change', {
@@ -411,8 +402,8 @@ class ClientVideoSyncController {
             currentTime: newTime,
             playerState: currentState,
             timestamp: Date.now(),
-            playbackRate: this.player.getPlaybackRate(),
-            quality: this.player.getPlaybackQuality()
+            playbackRate: this.player.getPlaybackRate()
+            // quality: Removed - deprecated API method
         };
         
         this.socket.emit('video-state-change', {
@@ -442,8 +433,8 @@ class ClientVideoSyncController {
             currentTime: newTime,
             playerState: originalState,
             timestamp: Date.now(),
-            playbackRate: this.player.getPlaybackRate(),
-            quality: this.player.getPlaybackQuality()
+            playbackRate: this.player.getPlaybackRate()
+            // quality: Removed - deprecated API method
         };
         
         this.socket.emit('video-state-change', {
@@ -862,12 +853,11 @@ function setupSocketListeners() {
         }
     });
     
+    // Quality change socket listener - DISABLED (deprecated API)
+    // Quality is now auto-managed by YouTube
     socket.on('video-quality-change', (data) => {
-        if (!isAdmin && data.quality) {
-            setVideoQuality(data.quality);
-            const qualityText = data.quality === 'auto' ? 'Auto' : data.quality;
-            displaySystemMessage(`Admin đổi chất lượng: ${qualityText}`);
-        }
+        // No longer supported - quality control is deprecated
+        displaySystemMessage('⚠️ Chất lượng video tự động bởi YouTube');
     });
     
     socket.on('caption-change', (data) => {
@@ -1547,15 +1537,26 @@ function initializeCustomControls() {
         });
     }
     
-    // Quality control
+    // Quality control - DISABLED (deprecated API)
+    // Quality is now auto-managed by YouTube
     if (qualityBtn) {
+        // Remove click interaction - quality button is now read-only display
         qualityBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            toggleQualityMenu();
+            // Show message that quality is auto-managed
+            displaySystemMessage('⚠️ Chất lượng video tự động bởi YouTube (không thể điều chỉnh thủ công)');
         });
+        
+        // Update button style to indicate it's read-only
+        qualityBtn.style.opacity = '0.7';
+        qualityBtn.style.cursor = 'not-allowed';
+        qualityBtn.title = 'Chất lượng tự động (không thể thay đổi)';
     }
     
-    // Quality options will be populated dynamically by loadAvailableQualities()
+    // Hide quality menu since we can't change quality manually
+    if (qualityMenu) {
+        qualityMenu.style.display = 'none';
+    }
     
     // Caption control
     if (captionBtn) {
@@ -2288,78 +2289,48 @@ function buildAutoQualityMenu() {
     qualityMenu.appendChild(autoOption);
 }
 
-// 🎮 Set Video Quality
+// 🎮 Set Video Quality - DEPRECATED API (No-op function)
+// YouTube IFrame API has deprecated quality control methods
+// Quality is now automatically managed by YouTube
 function setVideoQuality(quality) {
     if (!player || !isPlayerReady) return;
     
-    try {
-        if (quality === 'auto' || quality === 'default') {
-            // Reset to auto quality by setting to highest available
-            const availableLevels = player.getAvailableQualityLevels();
-            if (availableLevels && availableLevels.length > 0) {
-                // Set to first available (usually highest)
-                player.setPlaybackQuality(availableLevels[0]);
-            }
-            currentQuality = 'auto';
-        } else {
-            // Set specific quality
-            player.setPlaybackQuality(quality);
-            currentQuality = quality;
-        }
-        
-        // Update active state in menu
-        if (qualityMenu) {
-            const options = qualityMenu.querySelectorAll('.quality-option');
-            options.forEach(opt => {
-                if (opt.dataset.quality === quality) {
-                    opt.classList.add('active');
-                } else {
-                    opt.classList.remove('active');
-                }
-            });
-        }
-        
-        // Update quality button display
-        updateQualityButtonDisplay(quality);
-        
-        // Emit to other users if admin
-        if (isAdmin && socket) {
-            socket.emit('video-quality-change', {
-                quality: quality,
-                roomId: currentRoom
-            });
-        }
-        
-        // Show system message
-        const qualityNames = {
-            'highres': '4K/8K',
-            'hd2160': '4K',
-            'hd1440': '1440p',
-            'hd1080': '1080p',
-            'hd720': '720p',
-            'large': '480p',
-            'medium': '360p',
-            'small': '240p',
-            'tiny': '144p',
-            'auto': 'Auto',
-            'default': 'Auto'
-        };
-        const displayName = qualityNames[quality] || quality.toUpperCase();
-        displaySystemMessage(`Chất lượng: ${displayName}`);
-        
-    } catch (error) {
-        displaySystemMessage('⚠️ Không thể thay đổi chất lượng video');
-    }
+    // Display notification that quality is auto-managed
+    displaySystemMessage('⚠️ Chất lượng video tự động bởi YouTube (không thể điều chỉnh thủ công)');
+    
+    // Always use auto quality
+    currentQuality = 'auto';
+    
+    // Update UI to show auto
+    updateQualityButtonDisplay('auto');
+    
+    // Note: No longer calling deprecated methods:
+    // - player.setPlaybackQuality() - DEPRECATED
+    // - player.getAvailableQualityLevels() - DEPRECATED
 }
 
-// Update quality button display text
-function updateQualityButtonDisplay(quality) {
-    if (!qualityBtn) return;
-    
-    const qualityIcon = qualityBtn.querySelector('.quality-icon');
-    if (!qualityIcon) return;
-    
-    const qualityDisplay = {
+// 🎮 Helper function to format quality display names
+function getQualityDisplayName(quality) {
+    const names = {
+        'small': '144p',
+        'tiny': '144p',
+        'medium': '360p',
+        'large': '480p',
+        'hd720': '720p',
+        'hd1080': '1080p',
+        'hd1440': '1440p',
+        'hd2160': '4K',
+        'highres': '4K+',
+        'unknown': 'Auto',
+        'default': 'Auto',
+        'auto': 'Auto'
+    };
+    return names[quality] || quality;
+}
+
+// 🎮 Helper function for button display (shortened versions)
+function getQualityButtonDisplay(quality) {
+    const display = {
         'highres': '4K',
         'hd2160': '4K',
         'hd1440': '2K',
@@ -2369,11 +2340,24 @@ function updateQualityButtonDisplay(quality) {
         'medium': '360',
         'small': '240',
         'tiny': '144',
-        'auto': 'HD',
-        'default': 'HD'
+        'auto': 'Auto',
+        'default': 'Auto',
+        'unknown': 'Auto'
     };
+    return display[quality] || 'Auto';
+}
+
+// Update quality button display text
+function updateQualityButtonDisplay(quality) {
+    if (!qualityBtn) return;
     
-    qualityIcon.textContent = qualityDisplay[quality] || 'HD';
+    const qualityIcon = qualityBtn.querySelector('.quality-icon');
+    if (!qualityIcon) return;
+    
+    qualityIcon.textContent = getQualityButtonDisplay(quality);
+    
+    // Update tooltip to indicate auto-quality
+    qualityBtn.title = 'Chất lượng tự động (không thể thay đổi)';
 }
 
 // 🎮 Toggle Caption Menu
@@ -2742,22 +2726,23 @@ function loadYouTubeVideo(videoId) {
             updateVideoTitle();
         }, 1000);
         
-        // Reload quality levels for new video
-        setTimeout(() => {
-            loadAvailableQualities();
-        }, 2000);
+        // Reload quality levels for new video - DEPRECATED API
+        // Quality control methods are deprecated by YouTube IFrame API
+        // setTimeout(() => {
+        //     loadAvailableQualities();
+        // }, 2000);
         
-        setTimeout(() => {
-            if (availableQualities.length === 0) {
-                loadAvailableQualities();
-            }
-        }, 4000);
+        // setTimeout(() => {
+        //     if (availableQualities.length === 0) {
+        //         loadAvailableQualities();
+        //     }
+        // }, 4000);
         
-        setTimeout(() => {
-            if (availableQualities.length === 0) {
-                loadAvailableQualities();
-            }
-        }, 6000);
+        // setTimeout(() => {
+        //     if (availableQualities.length === 0) {
+        //         loadAvailableQualities();
+        //     }
+        // }, 6000);
         
         // Reload captions for new video
         setTimeout(() => {
@@ -2789,7 +2774,8 @@ function loadYouTubeVideo(videoId) {
                 'disablekb': 1, // 🎮 Disable YouTube keyboard (use custom shortcuts)
                 'fs': 0, // 🎮 Disable YouTube fullscreen (use custom fullscreen)
                 'iv_load_policy': 3, // Hide annotations
-                'cc_load_policy': 0 // Don't auto-load captions, but make them available
+                'cc_load_policy': 0, // Don't auto-load captions, but make them available
+                'vq': 'auto' // Auto quality (recommended, though quality control is deprecated)
             },
             events: {
                 'onReady': onPlayerReady,
@@ -2858,6 +2844,15 @@ function onPlayerReady(event) {
         videoStateManager
     );
     
+    // 🎮 Add event listener for auto-quality changes (monitoring only)
+    // This allows us to display current quality when YouTube changes it automatically
+    player.addEventListener('onPlaybackQualityChange', function(event) {
+        const newQuality = event.data; // e.g., 'hd1080', 'medium'
+        currentQuality = newQuality; // Update local state
+        updateQualityButtonDisplay(newQuality); // Display on UI (read-only)
+        displaySystemMessage(`📊 Chất lượng tự động: ${getQualityDisplayName(newQuality)}`);
+    });
+    
     // Hide placeholder and loading
     if (videoPlaceholder) videoPlaceholder.style.display = 'none';
     if (loading) loading.style.display = 'none';
@@ -2881,25 +2876,25 @@ function onPlayerReady(event) {
     // 🎮 Set video title
     updateVideoTitle();
     
-    // 🎮 Load available quality levels
-    // Wait longer for YouTube to load video metadata
-    setTimeout(() => {
-        loadAvailableQualities();
-    }, 2000);
+    // 🎮 Load available quality levels - DEPRECATED API
+    // Quality control methods are deprecated by YouTube IFrame API
+    // setTimeout(() => {
+    //     loadAvailableQualities();
+    // }, 2000);
     
-    // 🎮 Retry loading quality levels if still only auto
-    setTimeout(() => {
-        if (availableQualities.length === 0) {
-            loadAvailableQualities();
-        }
-    }, 4000);
+    // // 🎮 Retry loading quality levels if still only auto
+    // setTimeout(() => {
+    //     if (availableQualities.length === 0) {
+    //         loadAvailableQualities();
+    //     }
+    // }, 4000);
     
-    // 🎮 Final retry for quality levels
-    setTimeout(() => {
-        if (availableQualities.length === 0) {
-            loadAvailableQualities();
-        }
-    }, 6000);
+    // // 🎮 Final retry for quality levels
+    // setTimeout(() => {
+    //     if (availableQualities.length === 0) {
+    //         loadAvailableQualities();
+    //     }
+    // }, 6000);
     
     // 🎮 Load available captions/subtitles
     // YouTube needs time to load caption tracks
