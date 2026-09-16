@@ -1,6 +1,11 @@
 # Sử dụng Node.js 18 Alpine image (nhẹ và bảo mật)
 FROM node:18-alpine
 
+# Cài đặt python3, ffmpeg, curl và yt-dlp cho Linux
+RUN apk add --no-cache python3 ffmpeg curl && \
+    curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
+    chmod a+rx /usr/local/bin/yt-dlp
+
 # Đặt thư mục làm việc
 WORKDIR /app
 

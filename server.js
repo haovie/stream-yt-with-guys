@@ -114,22 +114,37 @@ app.get('/', (req, res) => {
 // 🎵 YOUTUBE AUDIO TRACKS API
 // ============================================================================
 app.get('/api/youtube/audio-tracks/:videoId', async (req, res) => {
+  const { videoId } = req.params;
+  if (!videoId) {
+    return res.status(400).json({ success: false, error: 'Video ID is required' });
+  }
+
   try {
-    const { videoId } = req.params;
-    if (!videoId) {
-      return res.status(400).json({ success: false, error: 'Video ID is required' });
-    }
     const tracks = await youtubeAudio.getAudioTracks(videoId);
     res.json({
       success: true,
       videoId: videoId,
-      tracks: tracks
+      tracks: tracks,
+      count: tracks.length,
+      isFallback: tracks.length <= 1
     });
   } catch (err) {
-    console.error('[API] Error getting audio tracks:', err.message);
-    res.status(500).json({
-      success: false,
+    console.error(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: 'ERROR',
+      scope: 'API/audio-tracks',
+      message: 'Failed to retrieve audio tracks, using safe default fallback',
+      videoId,
       error: err.message,
+      stack: err.stack
+    }));
+
+    // Return safe fallback with status 200 so UI continues smoothly
+    res.json({
+      success: true,
+      videoId: videoId,
+      isFallback: true,
+      warning: err.message,
       tracks: [{
         id: 'default',
         formatId: 'default',

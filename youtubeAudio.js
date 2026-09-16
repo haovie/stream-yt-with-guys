@@ -1,6 +1,6 @@
 const https = require('https');
 const http = require('http');
-const { spawn, execFile } = require('child_process');
+const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -9,7 +9,7 @@ const trackCache = new Map(); // videoId -> { tracks, timestamp }
 const streamUrlCache = new Map(); // `${videoId}_${trackId}` -> { url, expiresAt }
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
-// Mapping of language codes to Vietnamese & readable names
+// Mapping of language codes to Vietnamese readable names
 const LANGUAGE_NAMES = {
     'vi': 'Tiếng Việt',
     'en': 'Tiếng Anh',
@@ -56,24 +56,64 @@ const LANGUAGE_NAMES = {
     'fil': 'Tiếng Filipino'
 };
 
-// Resolve yt-dlp binary path
+/**
+ * Structured Logger for YouTube Audio service
+ */
+function logAudio(level, message, meta = {}) {
+    const logObj = {
+        timestamp: new Date().toISOString(),
+        level: level.toUpperCase(),
+        service: 'YouTubeAudio',
+        message,
+        ...meta
+    };
+    if (level === 'error') {
+        console.error(JSON.stringify(logObj));
+    } else if (level === 'warn') {
+        console.warn(JSON.stringify(logObj));
+    } else {
+        console.log(JSON.stringify(logObj));
+    }
+}
+
+/**
+ * Resolve yt-dlp binary path taking OS platform into account
+ */
 function getYtDlpPath() {
-    const candidates = [
-        process.env.YTDLP_PATH,
-        path.join(__dirname, 'bin', 'yt-dlp'),
-        '/tmp/yt-dlp',
-        'yt-dlp'
-    ].filter(Boolean);
+    const isLinux = process.platform === 'linux';
+    const candidates = [];
+
+    if (process.env.YTDLP_PATH) {
+        candidates.push(process.env.YTDLP_PATH);
+    }
+
+    if (isLinux) {
+        // Standard Linux paths
+        candidates.push('/usr/local/bin/yt-dlp', '/usr/bin/yt-dlp', 'yt-dlp');
+    } else {
+        // macOS / Windows local development paths
+        candidates.push(
+            path.join(__dirname, 'bin', 'yt-dlp'),
+            '/tmp/yt-dlp',
+            '/usr/local/bin/yt-dlp',
+            'yt-dlp'
+        );
+    }
 
     for (const candidate of candidates) {
         if (candidate === 'yt-dlp') {
             return 'yt-dlp';
         }
         if (fs.existsSync(candidate)) {
-            return candidate;
+            try {
+                fs.accessSync(candidate, fs.constants.X_OK);
+                return candidate;
+            } catch (e) {
+                // not executable
+            }
         }
     }
-    return null;
+    return 'yt-dlp'; // fallback to PATH lookup
 }
 
 /**
@@ -84,7 +124,6 @@ function getLanguageDisplayName(langCode, formatNote) {
         return LANGUAGE_NAMES[langCode];
     }
     if (formatNote) {
-        // Strip out ", medium", "- dubbed", etc.
         let clean = formatNote.replace(/,\s*(medium|low|tiny|ultralow)/gi, '').trim();
         clean = clean.replace(/-\s*dubbed/gi, '').trim();
         if (clean) return clean;
@@ -93,51 +132,80 @@ function getLanguageDisplayName(langCode, formatNote) {
 }
 
 /**
- * Fetch HTML of YouTube watch page
+ * Fetch HTML of YouTube watch page with realistic headers and cookies
  */
-function fetchWatchPage(videoId) {
+function fetchWatchPage(videoId, redirectCount = 0) {
     return new Promise((resolve, reject) => {
+        if (redirectCount > 3) {
+            return reject(new Error('Too many redirects when fetching YouTube watch page'));
+        }
+
         const url = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&hl=vi`;
-        https.get(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Accept-Language': 'vi,en;q=0.9',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-            }
-        }, (res) => {
+        const headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Upgrade-Insecure-Requests': '1',
+            // Pre-seed Google consent and language cookies to bypass consent interstitials
+            'Cookie': 'PREF=hl=vi&gl=VN; SOCS=CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODI5LjA3X3AwGgJ2aSACGgYIgLCnpgY;'
+        };
+
+        const req = https.get(url, { headers, timeout: 10000 }, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                https.get(res.headers.location, (redirectRes) => {
+                const nextUrl = res.headers.location.startsWith('http') 
+                    ? res.headers.location 
+                    : `https://www.youtube.com${res.headers.location}`;
+                
+                https.get(nextUrl, { headers, timeout: 10000 }, (redirectRes) => {
                     let data = '';
                     redirectRes.on('data', chunk => data += chunk);
                     redirectRes.on('end', () => resolve(data));
                 }).on('error', reject);
                 return;
             }
+
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => resolve(data));
-        }).on('error', reject);
+        });
+
+        req.on('timeout', () => {
+            req.destroy(new Error('Watch page request timeout'));
+        });
+        req.on('error', reject);
     });
 }
 
 /**
- * Extract audio tracks using ytInitialPlayerResponse from watch page
+ * Layer 2: Extract audio tracks from YouTube Watch Page HTML
  */
 async function extractTracksFromWatchPage(videoId) {
     try {
         const html = await fetchWatchPage(videoId);
+        if (!html) return null;
+
         const match = html.match(/ytInitialPlayerResponse\s*=\s*({.+?});(?:var|\n|<\/script>)/s);
-        if (!match) return null;
+        if (!match) {
+            logAudio('warn', 'Could not locate ytInitialPlayerResponse in watch page HTML', { videoId });
+            return null;
+        }
 
         const playerResponse = JSON.parse(match[1]);
         const adaptiveFormats = playerResponse.streamingData?.adaptiveFormats || [];
         const audioFormats = adaptiveFormats.filter(f => f.mimeType && f.mimeType.startsWith('audio/'));
 
-        if (!audioFormats || audioFormats.length === 0) return null;
+        if (!audioFormats || audioFormats.length === 0) {
+            logAudio('info', 'No adaptive audio formats found in player response', { videoId });
+            return null;
+        }
 
         const trackMap = new Map();
         
-        // Always include default track
+        // Default YouTube player audio
         trackMap.set('default', {
             id: 'default',
             formatId: 'default',
@@ -176,20 +244,22 @@ async function extractTracksFromWatchPage(videoId) {
             }
         }
 
+        logAudio('info', `Watch page parser extracted ${trackMap.size} tracks`, { videoId, count: trackMap.size });
         return Array.from(trackMap.values());
     } catch (err) {
-        console.warn(`[YouTubeAudio] Watch page fallback failed for ${videoId}:`, err.message);
+        logAudio('warn', `Watch page parser error: ${err.message}`, { videoId, stack: err.stack });
         return null;
     }
 }
 
 /**
- * Extract audio tracks and formats using yt-dlp
+ * Layer 1: Extract audio tracks and formats using yt-dlp
  */
 function extractTracksWithYtDlp(videoId) {
     return new Promise((resolve) => {
         const ytDlp = getYtDlpPath();
         if (!ytDlp) {
+            logAudio('info', 'yt-dlp binary not found, skipping yt-dlp extraction', { videoId });
             return resolve(null);
         }
 
@@ -201,9 +271,12 @@ function extractTracksWithYtDlp(videoId) {
             `https://www.youtube.com/watch?v=${videoId}`
         ];
 
-        execFile(ytDlp, args, { maxBuffer: 25 * 1024 * 1024, timeout: 15000 }, (error, stdout) => {
+        execFile(ytDlp, args, { maxBuffer: 25 * 1024 * 1024, timeout: 15000 }, (error, stdout, stderr) => {
             if (error || !stdout) {
-                console.warn(`[YouTubeAudio] yt-dlp info failed: ${error ? error.message : 'No output'}`);
+                logAudio('warn', `yt-dlp execution failed: ${error ? error.message : 'No output'}`, { 
+                    videoId, 
+                    stderr: stderr ? stderr.substring(0, 200) : null 
+                });
                 return resolve(null);
             }
 
@@ -232,11 +305,9 @@ function extractTracksWithYtDlp(videoId) {
                 const hasMultiTracks = audioFormats.some(f => f.language || (f.format_note && (f.format_note.includes('dubbed') || f.format_note.includes('original'))));
 
                 if (!hasMultiTracks) {
-                    // Single track video
                     return resolve(Array.from(trackMap.values()));
                 }
 
-                // Process all audio formats
                 audioFormats.forEach((f) => {
                     const langCode = f.language || (f.language_preference === 10 ? 'orig' : (f.format_note && f.format_note.includes('original') ? 'orig' : null));
                     if (!langCode && !f.format_note) return;
@@ -249,14 +320,14 @@ function extractTracksWithYtDlp(videoId) {
                     const langName = getLanguageDisplayName(effectiveLang, f.format_note);
                     const displayName = isOriginal ? `${langName} (Gốc)` : `${langName} (Lồng tiếng)`;
 
-                    // Format priority: prefer progressive formats (m4a / webm) over HLS (m3u8), and higher bitrate
+                    // Score: prefer progressive audio (m4a/webm) over HLS (m3u8), and higher bitrate
                     const isProgressive = f.ext === 'm4a' || f.ext === 'webm' || (f.protocol && !f.protocol.includes('m3u8'));
-                    const currentBitrate = (f.tbr || f.abr || 128) + (isProgressive ? 1000 : 0);
+                    const score = (f.tbr || f.abr || 128) + (isProgressive ? 1000 : 0);
 
                     const existing = trackMap.get(trackId);
-                    const existingBitrate = existing ? (existing._score || 0) : -1;
+                    const existingScore = existing ? (existing._score || 0) : -1;
 
-                    if (!existing || currentBitrate > existingBitrate) {
+                    if (!existing || score > existingScore) {
                         trackMap.set(trackId, {
                             id: trackId,
                             formatId: f.format_id,
@@ -269,20 +340,20 @@ function extractTracksWithYtDlp(videoId) {
                             bitrate: f.tbr || f.abr || 128,
                             ext: f.ext,
                             url: f.url,
-                            _score: currentBitrate
+                            _score: score
                         });
                     }
                 });
 
-                // Remove internal _score property before returning
                 const result = Array.from(trackMap.values()).map(t => {
                     const { _score, ...rest } = t;
                     return rest;
                 });
 
+                logAudio('info', `yt-dlp successfully parsed ${result.length} tracks`, { videoId, count: result.length });
                 resolve(result);
             } catch (parseErr) {
-                console.warn('[YouTubeAudio] Failed to parse yt-dlp JSON:', parseErr.message);
+                logAudio('warn', `Failed to parse yt-dlp JSON: ${parseErr.message}`, { videoId });
                 resolve(null);
             }
         });
@@ -290,7 +361,7 @@ function extractTracksWithYtDlp(videoId) {
 }
 
 /**
- * Get available audio tracks for a given YouTube Video ID
+ * Get available audio tracks with automatic fallback and memory cache
  */
 async function getAudioTracks(videoId) {
     if (!videoId || typeof videoId !== 'string') {
@@ -303,19 +374,30 @@ async function getAudioTracks(videoId) {
         return cached.tracks;
     }
 
-    // Try yt-dlp first
-    let tracks = await extractTracksWithYtDlp(videoId);
+    let tracks = null;
 
-    // If yt-dlp failed or returned only default, try watch page parser
+    // Layer 1: yt-dlp
+    try {
+        tracks = await extractTracksWithYtDlp(videoId);
+    } catch (e) {
+        logAudio('warn', `yt-dlp layer error: ${e.message}`, { videoId });
+    }
+
+    // Layer 2: Watch Page Scraper if yt-dlp failed or only returned 1 track
     if (!tracks || tracks.length <= 1) {
-        const watchPageTracks = await extractTracksFromWatchPage(videoId);
-        if (watchPageTracks && watchPageTracks.length > 1) {
-            tracks = watchPageTracks;
+        try {
+            const watchPageTracks = await extractTracksFromWatchPage(videoId);
+            if (watchPageTracks && watchPageTracks.length > 1) {
+                tracks = watchPageTracks;
+            }
+        } catch (e) {
+            logAudio('warn', `Watch page layer error: ${e.message}`, { videoId });
         }
     }
 
-    // Fallback: If no tracks detected, always return at least the default track
+    // Layer 3: Safe Fallback to default YouTube track (guarantees no 500 error)
     if (!tracks || tracks.length === 0) {
+        logAudio('info', `No multi-language tracks found, falling back to default track`, { videoId });
         tracks = [{
             id: 'default',
             formatId: 'default',
@@ -419,7 +501,6 @@ async function streamAudioTrack(req, res, videoId, trackId) {
             // Forward status code (206 Partial Content or 200 OK)
             res.status(proxyRes.statusCode);
 
-            // Forward relevant audio streaming headers
             const forwardHeaders = [
                 'content-range',
                 'content-length',
@@ -434,7 +515,6 @@ async function streamAudioTrack(req, res, videoId, trackId) {
                 }
             });
 
-            // Default content type if not set
             if (!res.getHeader('content-type')) {
                 res.setHeader('Content-Type', 'audio/mp4');
             }
@@ -445,19 +525,18 @@ async function streamAudioTrack(req, res, videoId, trackId) {
         });
 
         proxyReq.on('error', (err) => {
-            console.error('[YouTubeAudio] Proxy stream error:', err.message);
+            logAudio('error', `Proxy stream error: ${err.message}`, { videoId, trackId });
             if (!res.headersSent) {
                 res.status(502).json({ error: 'Failed to stream audio from source' });
             }
         });
 
-        // Abort upstream stream if client disconnects
         req.on('close', () => {
             proxyReq.destroy();
         });
 
     } catch (err) {
-        console.error('[YouTubeAudio] Stream handler error:', err.message);
+        logAudio('error', `Stream handler exception: ${err.message}`, { videoId, trackId, stack: err.stack });
         if (!res.headersSent) {
             res.status(500).json({ error: err.message });
         }
