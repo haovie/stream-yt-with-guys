@@ -862,9 +862,22 @@ function setupSocketListeners() {
     
     socket.on('caption-change', (data) => {
         if (!isAdmin) {
-            setCaptions(data.track);
-            const captionText = data.track === 'off' ? 'Off' : (availableCaptions[data.track]?.displayName || 'On');
-            displaySystemMessage(`Admin đổi phụ đề: ${captionText}`);
+            if (data.track === 'off') {
+                setCaptions('off', false);
+                displaySystemMessage('Admin: Đã tắt phụ đề');
+            } else {
+                let targetIndex = data.track;
+                if (data.langCode && availableCaptions && availableCaptions.length > 0) {
+                    const found = availableCaptions.findIndex(t => t.languageCode === data.langCode);
+                    if (found !== -1) {
+                        targetIndex = found;
+                    }
+                }
+                setCaptions(targetIndex, false);
+                const captionText = (availableCaptions && availableCaptions[targetIndex]?.displayName) || 
+                                    (availableCaptions && availableCaptions[targetIndex]?.languageName) || 'Bật';
+                displaySystemMessage(`Admin đổi phụ đề: ${captionText}`);
+            }
         }
     });
     
@@ -2074,6 +2087,10 @@ function handleKeyboardShortcuts(e) {
             e.preventDefault();
             toggleFullscreen();
             break;
+        case 'c':
+            e.preventDefault();
+            toggleCaptionShortcut();
+            break;
         case 'arrowup':
             e.preventDefault();
             adjustVolume(10);
@@ -2373,6 +2390,10 @@ function toggleCaptionMenu() {
     if (isVisible) {
         captionMenu.classList.remove('visible');
     } else {
+        // If captions haven't been loaded yet and player is ready, attempt to load them
+        if (availableCaptions.length === 0 && isPlayerReady) {
+            loadAvailableCaptions();
+        }
         captionMenu.classList.add('visible');
     }
 }
@@ -2398,52 +2419,31 @@ function toggleSpeedMenu() {
 function loadAvailableCaptions() {
     if (!player || !isPlayerReady || !captionMenu) return;
     
-    // Only show loading if menu is currently empty or has loading state
-    const currentContent = captionMenu.innerHTML;
-    if (!currentContent || currentContent.includes('caption-loading')) {
-        showCaptionLoading();
+    // Ensure captions module is requested in the player
+    try {
+        if (typeof player.loadModule === 'function') {
+            player.loadModule('captions');
+            player.loadModule('cc');
+        }
+    } catch (e) {
+        // Module might already be loaded or not supported
     }
     
+    // Try to get tracklist from YouTube player
+    let trackInfo = null;
     try {
-        const options = player.getOptions();
-        
-        if (options && options.includes('captions')) {
-            // Load captions module first to ensure it's available
-            try {
-                player.loadModule('captions');
-            } catch (e) {
-                // Module already loaded or not needed
-            }
-            
-            // Wait for module to load
-            setTimeout(() => {
-                try {
-                    const trackInfo = player.getOption('captions', 'tracklist');
-                    
-                    if (trackInfo && Array.isArray(trackInfo) && trackInfo.length > 0) {
-                        availableCaptions = trackInfo;
-                        buildCaptionMenu(trackInfo);
-                        return;
-                    }
-                } catch (err) {
-                    // Failed to get tracklist
-                }
-                
-                // No captions available
-                // Don't overwrite if we already have captions loaded
-                if (availableCaptions.length === 0) {
-                    buildNoCaptionsMenu();
-                }
-            }, 500);
-            
-        } else {
-            // Captions option not available
-            if (availableCaptions.length === 0) {
-                buildNoCaptionsMenu();
-            }
+        if (typeof player.getOption === 'function') {
+            trackInfo = player.getOption('captions', 'tracklist') || player.getOption('cc', 'tracklist');
         }
-        
-    } catch (error) {
+    } catch (err) {
+        // Track list not ready yet
+    }
+    
+    if (trackInfo && Array.isArray(trackInfo) && trackInfo.length > 0) {
+        availableCaptions = trackInfo;
+        buildCaptionMenu(trackInfo);
+    } else {
+        // If tracks not available yet and availableCaptions is empty, show empty state
         if (availableCaptions.length === 0) {
             buildNoCaptionsMenu();
         }
@@ -2466,10 +2466,15 @@ function showCaptionLoading() {
 function buildCaptionMenu(trackInfo) {
     if (!captionMenu) return;
     
+    // Restore caption button normal state
+    if (captionBtn) {
+        captionBtn.classList.remove('disabled');
+        captionBtn.title = 'Phụ đề / Phụ đề chi tiết (Phím C)';
+    }
+    
     captionMenu.innerHTML = '';
     
-    // Check if we need to apply the previous caption preference
-    let foundPreviousTrack = false;
+    let activeTrackFound = false;
     
     // Add "Off" option
     const offOption = document.createElement('div');
@@ -2480,12 +2485,6 @@ function buildCaptionMenu(trackInfo) {
         setCaptions('off');
         toggleCaptionMenu();
     });
-    
-    // Set "Off" as active if no caption language is saved
-    if (!currentCaptionLangCode) {
-        offOption.classList.add('active');
-    }
-    
     captionMenu.appendChild(offOption);
     
     // Add separator
@@ -2502,24 +2501,28 @@ function buildCaptionMenu(trackInfo) {
         option.dataset.langCode = track.languageCode || '';
         option.dataset.langName = track.languageName || '';
         
-        // Display format: "English" or "English (auto-generated)"
-        let displayText = track.displayName || track.name || track.languageName || track.languageCode || `Track ${index + 1}`;
+        // Display format: "English" or "Tiếng Việt (tự động)"
+        let displayText = track.displayName || track.name || track.languageName || track.languageCode || `Phụ đề ${index + 1}`;
         
-        // Check if this track matches the saved language preference
-        if (currentCaptionLangCode && track.languageCode === currentCaptionLangCode && !foundPreviousTrack) {
+        // Check if this track matches the saved language preference or current active track
+        if (currentCaptionLangCode && track.languageCode === currentCaptionLangCode && !activeTrackFound) {
             option.classList.add('active');
-            foundPreviousTrack = true;
-            // Apply this caption to the new video
+            activeTrackFound = true;
+            // Apply this caption to the video
             setTimeout(() => {
-                setCaptions(index);
-            }, 500);
+                setCaptions(index, false);
+            }, 300);
+        } else if (currentCaptionTrack === index) {
+            option.classList.add('active');
+            activeTrackFound = true;
         }
         
-        // Add icon for auto-generated captions
-        if (track.kind === 'asr' || displayText.toLowerCase().includes('auto')) {
-            option.innerHTML = `<i class="fas fa-robot"></i> ${displayText}`;
+        // Add icon for auto-generated vs manual captions
+        const isAuto = track.kind === 'asr' || displayText.toLowerCase().includes('tự động') || displayText.toLowerCase().includes('auto');
+        if (isAuto) {
+            option.innerHTML = `<i class="fas fa-robot"></i> <span>${displayText}</span>`;
         } else {
-            option.innerHTML = `<i class="fas fa-closed-captioning"></i> ${displayText}`;
+            option.innerHTML = `<i class="fas fa-closed-captioning"></i> <span>${displayText}</span>`;
         }
         
         option.addEventListener('click', () => {
@@ -2530,19 +2533,12 @@ function buildCaptionMenu(trackInfo) {
         captionMenu.appendChild(option);
     });
     
-    // If previous language not found in new video, turn off captions
-    if (currentCaptionLangCode && !foundPreviousTrack) {
+    // If no active track, mark "Off" as active
+    if (!activeTrackFound) {
         offOption.classList.add('active');
-        currentCaptionTrack = null;
-        setTimeout(() => {
-            try {
-                player.unloadModule('captions');
-                if (captionBtn) captionBtn.classList.remove('active');
-                displaySystemMessage('Phụ đề: Tắt (video không có phụ đề đã chọn)');
-            } catch (e) {
-                // Ignore
-            }
-        }, 500);
+        if (captionBtn) captionBtn.classList.remove('active');
+    } else {
+        if (captionBtn) captionBtn.classList.add('active');
     }
 }
 
@@ -2554,50 +2550,38 @@ function buildNoCaptionsMenu() {
     
     const noCaption = document.createElement('div');
     noCaption.className = 'caption-option caption-unavailable';
-    noCaption.style.cssText = 'opacity: 0.6; cursor: not-allowed; pointer-events: none;';
-    noCaption.innerHTML = '<i class="fas fa-info-circle"></i> Không có phụ đề';
+    noCaption.style.cssText = 'opacity: 0.75; cursor: default;';
+    noCaption.innerHTML = '<i class="fas fa-info-circle"></i> Video không có phụ đề';
     captionMenu.appendChild(noCaption);
+    
+    if (captionBtn) {
+        captionBtn.classList.remove('active');
+        captionBtn.classList.add('disabled');
+        captionBtn.title = 'Phụ đề: Video không có phụ đề';
+    }
 }
 
 // 🎮 Set Captions
-function setCaptions(trackIndex) {
+function setCaptions(trackIndex, shouldEmit = true) {
     if (!player || !isPlayerReady) return;
     
     try {
         if (trackIndex === 'off' || trackIndex === null) {
-            // Turn off captions
+            // Turn off captions safely via player options without unloading module
             try {
-                player.unloadModule('captions');
-            } catch (e) {
-                try {
+                if (typeof player.setOption === 'function') {
                     player.setOption('captions', 'track', {});
-                } catch (e2) {
-                    // Could not turn off captions
+                    player.setOption('cc', 'track', {});
                 }
+            } catch (e) {
+                console.warn('Could not turn off captions:', e);
             }
-            currentCaptionTrack = null;
+            currentCaptionTrack = 'off';
             currentCaptionLangCode = null;
             
-        } else if (trackIndex === 'on') {
-            // Simple toggle on - enable first available track
-            try {
-                player.loadModule('captions');
-                const options = player.getOptions();
-                if (options && options.includes('captions')) {
-                    const tracks = player.getOption('captions', 'tracklist');
-                    if (tracks && tracks.length > 0) {
-                        const firstTrack = tracks[0];
-                        player.setOption('captions', 'track', {
-                            'languageCode': firstTrack.languageCode,
-                            'name': firstTrack.name || ''
-                        });
-                        currentCaptionLangCode = firstTrack.languageCode;
-                    }
-                }
-            } catch (e) {
-                // Could not enable captions
+            if (captionBtn) {
+                captionBtn.classList.remove('active');
             }
-            currentCaptionTrack = 'on';
             
         } else {
             // Turn on specific caption track by index
@@ -2607,19 +2591,30 @@ function setCaptions(trackIndex) {
                 const track = availableCaptions[index];
                 
                 try {
-                    player.loadModule('captions');
+                    if (typeof player.loadModule === 'function') {
+                        player.loadModule('captions');
+                        player.loadModule('cc');
+                    }
                     
                     const trackOptions = {
                         'languageCode': track.languageCode
                     };
-                    
                     if (track.name) trackOptions.name = track.name;
                     if (track.languageName) trackOptions.languageName = track.languageName;
                     
-                    player.setOption('captions', 'track', trackOptions);
+                    if (typeof player.setOption === 'function') {
+                        player.setOption('captions', 'track', trackOptions);
+                        player.setOption('cc', 'track', trackOptions);
+                    }
+                    
                     currentCaptionTrack = index;
                     currentCaptionLangCode = track.languageCode; // Save language code for next video
+                    
+                    if (captionBtn) {
+                        captionBtn.classList.add('active');
+                    }
                 } catch (e) {
+                    console.warn('Error setting caption track:', e);
                     displaySystemMessage('⚠️ Không thể bật phụ đề này');
                     return;
                 }
@@ -2640,45 +2635,57 @@ function setCaptions(trackIndex) {
             });
         }
         
-        // Update caption button icon state
-        if (captionBtn) {
-            if (trackIndex === 'off' || trackIndex === null) {
-                captionBtn.classList.remove('active');
-            } else {
-                captionBtn.classList.add('active');
-            }
-        }
-        
         // Emit to other users if admin
-        if (isAdmin && socket) {
+        if (shouldEmit && isAdmin && socket) {
             socket.emit('caption-change', {
                 track: trackIndex,
+                langCode: currentCaptionLangCode,
                 roomId: currentRoom
             });
         }
         
         // Show system message
-        let captionText;
-        if (trackIndex === 'off') {
-            captionText = 'Tắt';
-        } else if (trackIndex === 'on') {
-            captionText = 'Bật';
-        } else {
-            const index = parseInt(trackIndex);
-            if (!isNaN(index) && availableCaptions[index]) {
-                captionText = availableCaptions[index].displayName || 
-                              availableCaptions[index].languageName || 
-                              availableCaptions[index].languageCode || 
-                              'Bật';
+        if (shouldEmit) {
+            let captionText;
+            if (trackIndex === 'off' || trackIndex === null) {
+                captionText = 'Tắt';
             } else {
-                captionText = 'Bật';
+                const index = parseInt(trackIndex);
+                if (!isNaN(index) && availableCaptions[index]) {
+                    captionText = availableCaptions[index].displayName || 
+                                  availableCaptions[index].languageName || 
+                                  availableCaptions[index].languageCode || 
+                                  'Bật';
+                } else {
+                    captionText = 'Bật';
+                }
             }
+            displaySystemMessage(`Phụ đề: ${captionText}`);
         }
-        displaySystemMessage(`Phụ đề: ${captionText}`);
         
     } catch (error) {
+        console.warn('Error in setCaptions:', error);
         displaySystemMessage('⚠️ Không thể thay đổi phụ đề cho video này');
     }
+}
+
+// 🎮 Toggle caption shortcut (Key C)
+function toggleCaptionShortcut() {
+    if (!player || !isPlayerReady) return;
+    if (availableCaptions.length === 0) {
+        displaySystemMessage('ℹ️ Video này không có phụ đề');
+        return;
+    }
+    if (currentCaptionTrack === 'off' || currentCaptionTrack === null) {
+        setCaptions(0);
+    } else {
+        setCaptions('off');
+    }
+}
+
+// 🎮 onPlayerApiChange callback
+function onPlayerApiChange(event) {
+    loadAvailableCaptions();
 }
 
 // 🎮 Close all menus when clicking outside
@@ -2721,45 +2728,36 @@ function loadYouTubeVideo(videoId) {
         player.loadVideoById(videoId);
         updatePlayerControls();
         
+        // Reset caption states for new video
+        availableCaptions = [];
+        currentCaptionTrack = null;
+        if (captionBtn) {
+            captionBtn.classList.remove('active', 'disabled');
+            captionBtn.title = 'Phụ đề / Phụ đề chi tiết (Phím C)';
+        }
+        showCaptionLoading();
+        
         // Update video title for new video
         setTimeout(() => {
             updateVideoTitle();
         }, 1000);
         
-        // Reload quality levels for new video - DEPRECATED API
-        // Quality control methods are deprecated by YouTube IFrame API
-        // setTimeout(() => {
-        //     loadAvailableQualities();
-        // }, 2000);
-        
-        // setTimeout(() => {
-        //     if (availableQualities.length === 0) {
-        //         loadAvailableQualities();
-        //     }
-        // }, 4000);
-        
-        // setTimeout(() => {
-        //     if (availableQualities.length === 0) {
-        //         loadAvailableQualities();
-        //     }
-        // }, 6000);
-        
         // Reload captions for new video
         setTimeout(() => {
             loadAvailableCaptions();
-        }, 2500);
+        }, 1200);
         
         setTimeout(() => {
             if (availableCaptions.length === 0) {
                 loadAvailableCaptions();
             }
-        }, 5000);
+        }, 3000);
         
         setTimeout(() => {
             if (availableCaptions.length === 0) {
                 loadAvailableCaptions();
             }
-        }, 7000);
+        }, 5500);
     } else {
         player = new YT.Player('youtube-player', {
             height: '100%',
@@ -2779,7 +2777,8 @@ function loadYouTubeVideo(videoId) {
             },
             events: {
                 'onReady': onPlayerReady,
-                'onStateChange': onPlayerStateChange
+                'onStateChange': onPlayerStateChange,
+                'onApiChange': onPlayerApiChange
             }
         });
     }
@@ -2896,25 +2895,30 @@ function onPlayerReady(event) {
     //     }
     // }, 6000);
     
+    // Ensure onApiChange is listened to
+    try {
+        player.addEventListener('onApiChange', onPlayerApiChange);
+    } catch (e) {}
+
     // 🎮 Load available captions/subtitles
     // YouTube needs time to load caption tracks
     setTimeout(() => {
         loadAvailableCaptions();
-    }, 2500);
+    }, 1200);
     
     // 🎮 Retry loading captions for videos that load captions late
     setTimeout(() => {
         if (availableCaptions.length === 0) {
             loadAvailableCaptions();
         }
-    }, 5000);
+    }, 3000);
     
     // 🎮 Final retry for captions
     setTimeout(() => {
         if (availableCaptions.length === 0) {
             loadAvailableCaptions();
         }
-    }, 7000);
+    }, 5500);
 }
 
 // 🎮 Update Video Title

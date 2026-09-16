@@ -2011,6 +2011,15 @@ body.ios-fullscreen-active {
     color: #4fc3f7;
 }
 
+/* Disabled state when video has no captions */
+#caption-btn.disabled {
+    opacity: 0.5;
+}
+
+#caption-btn.disabled:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
 .speed-control.admin-only,
 .quality-control.admin-only,
 .caption-control.admin-only {

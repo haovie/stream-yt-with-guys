@@ -530,6 +530,22 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Đồng bộ thay đổi phụ đề (captions)
+  socket.on('caption-change', (data) => {
+    const { roomId } = data;
+    if (roomId) {
+      socket.to(roomId).emit('caption-change', data);
+    }
+  });
+
+  // Đồng bộ tốc độ phát video (playback speed)
+  socket.on('playback-speed-change', (data) => {
+    const { roomId } = data;
+    if (roomId) {
+      socket.to(roomId).emit('playback-speed-change', data);
+    }
+  });
+
   // Xử lý ngắt kết nối
   socket.on('disconnect', () => {
     if (socket.roomId && socket.username) {
