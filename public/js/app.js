@@ -29,12 +29,12 @@ function getUserColor(username) {
         hash = username.charCodeAt(i) + ((hash << 5) - hash);
         hash = hash & hash; // Convert to 32bit integer
     }
-    
+
     // Generate HSL color with good saturation and lightness
     const hue = Math.abs(hash % 360); // 0-359 degrees
     const saturation = 65 + (Math.abs(hash) % 20); // 65-85%
     const lightness = 55 + (Math.abs(hash >> 8) % 15); // 55-70%
-    
+
     return {
         hue: hue,
         primary: `hsl(${hue}, ${saturation}%, ${lightness}%)`,
@@ -63,20 +63,20 @@ class VideoSyncStateManager {
             playbackRate: 1,
             videoId: null
         };
-        
+
         // Configuration (Balanced profile)
         this.DRIFT_TOLERANCE = 2.0;          // Force seek if drift > 2s
         this.SMALL_DRIFT_TOLERANCE = 0.5;    // Ignore drift < 0.5s
         this.SYNC_INTERVAL = 5000;           // Check every 5s
         this.DEBOUNCE_DELAY = 300;           // 300ms debounce
-        
+
         // Flags
         this.isReceivingSync = false;
         this.isSeeking = false;
         this.syncDebounceTimer = null;
         this.lastSyncTime = 0;
     }
-    
+
     getPredictedTime() {
         if (!this.serverState.isPlaying) {
             return this.serverState.currentTime;
@@ -84,15 +84,15 @@ class VideoSyncStateManager {
         const timeSinceUpdate = (Date.now() - this.serverState.lastUpdate) / 1000;
         return this.serverState.currentTime + (timeSinceUpdate * this.serverState.playbackRate);
     }
-    
+
     calculateDrift(localTime) {
         return Math.abs(localTime - this.getPredictedTime());
     }
-    
+
     shouldSync(localTime) {
         return this.calculateDrift(localTime) > this.DRIFT_TOLERANCE;
     }
-    
+
     updateServerState(state) {
         this.serverState = { ...state, lastUpdate: Date.now() };
         this.lastSyncTime = Date.now();
@@ -105,19 +105,19 @@ class ClientVideoSyncController {
         this.socket = socket;
         this.roomId = roomId;
         this.stateManager = stateManager;
-        
+
         this.eventOrigin = {
             HUMAN: 'human',
             SYSTEM: 'system',
             NETWORK: 'network'
         };
-        
+
         this.currentEventOrigin = this.eventOrigin.SYSTEM;
         this.seekDebounceTimer = null;
-        
+
         this.setupPeriodicSync();
     }
-    
+
     markEventOrigin(origin) {
         this.currentEventOrigin = origin;
         setTimeout(() => {
@@ -126,43 +126,43 @@ class ClientVideoSyncController {
             }
         }, 500);  // ✅ Increased from 100ms to 500ms
     }
-    
+
     onPlayerStateChange(event) {
         const state = event.data;
         const currentTime = this.player.getCurrentTime();
-        
+
         // Anti-feedback loop protection
         if (this.currentEventOrigin === this.eventOrigin.NETWORK) {
             this.currentEventOrigin = this.eventOrigin.SYSTEM;
             updatePlayPauseButton(); // ✅ Update UI even for network events
             return;
         }
-        
+
         if (this.stateManager.isReceivingSync) {
             updatePlayPauseButton(); // ✅ Update UI
             return;
         }
-        
+
         // ✅ Handle ENDED state: Don't broadcast ENDED, wait for next state (PLAYING or CUED)
         if (state === YT.PlayerState.ENDED) {
             // User might click play to replay, wait for PLAYING state
             return;
         }
-        
+
         // Human-triggered event - broadcast it
         if (this.currentEventOrigin === this.eventOrigin.HUMAN) {
             this.broadcastStateChange(state, currentTime);
         }
-        
+
         // Update local state
         this.stateManager.serverState.isPlaying = (state === YT.PlayerState.PLAYING);
         this.stateManager.serverState.currentTime = currentTime;
         this.stateManager.serverState.lastUpdate = Date.now();
-        
+
         // ✅ Always update UI after state change
         updatePlayPauseButton();
     }
-    
+
     getStateName(state) {
         const stateNames = {
             '-1': 'UNSTARTED',
@@ -174,12 +174,12 @@ class ClientVideoSyncController {
         };
         return stateNames[state] || 'UNKNOWN';
     }
-    
+
     broadcastStateChange(state, currentTime) {
         if (this.stateManager.syncDebounceTimer) {
             clearTimeout(this.stateManager.syncDebounceTimer);
         }
-        
+
         this.stateManager.syncDebounceTimer = setTimeout(() => {
             const syncData = {
                 isPlaying: state === YT.PlayerState.PLAYING,
@@ -189,21 +189,21 @@ class ClientVideoSyncController {
                 playbackRate: this.player.getPlaybackRate()
                 // quality: Removed - deprecated API method
             };
-            
+
             this.socket.emit('video-state-change', {
                 state: syncData,
                 roomId: this.roomId
             });
         }, this.stateManager.DEBOUNCE_DELAY);
     }
-    
+
     receiveSync(state) {
         this.stateManager.updateServerState(state);
-        
+
         const currentTime = this.player.getCurrentTime();
         const currentState = this.player.getPlayerState();
         const isCurrentlyPlaying = (currentState === YT.PlayerState.PLAYING);
-        
+
         // ✅ Sync play/pause state even with minimal drift
         if (state.isPlaying !== isCurrentlyPlaying) {
             this.markEventOrigin(this.eventOrigin.NETWORK);
@@ -214,46 +214,46 @@ class ClientVideoSyncController {
             }
             updatePlayPauseButton();
         }
-        
+
         // Quality sync removed - deprecated API methods
         // YouTube now automatically manages quality
-        
+
         const drift = this.stateManager.calculateDrift(currentTime);
-        
+
         // Small drift - ignore seek but keep play/pause synced
         if (drift <= this.stateManager.SMALL_DRIFT_TOLERANCE) {
             return;
         }
-        
+
         // Moderate drift - adjust playback rate
         if (drift <= this.stateManager.DRIFT_TOLERANCE) {
             this.adjustPlaybackRate(drift, currentTime, state.currentTime);
             return;
         }
-        
+
         // Large drift - force seek
         this.performSeek(state.currentTime, state.isPlaying);
     }
-    
+
     adjustPlaybackRate(drift, currentTime, targetTime) {
         const needsCatchUp = currentTime < targetTime;
         const tempRate = needsCatchUp ? 1.15 : 0.85;
-        
+
         this.markEventOrigin(this.eventOrigin.NETWORK);
         this.player.setPlaybackRate(tempRate);
-        
+
         setTimeout(() => {
             this.markEventOrigin(this.eventOrigin.NETWORK);
             this.player.setPlaybackRate(1.0);
         }, 3000);
     }
-    
+
     performSeek(targetTime, shouldPlay) {
         this.stateManager.isReceivingSync = true;
         this.markEventOrigin(this.eventOrigin.NETWORK);
-        
+
         this.player.seekTo(targetTime, true);
-        
+
         setTimeout(() => {
             this.markEventOrigin(this.eventOrigin.NETWORK);
             if (shouldPlay && this.player.getPlayerState() !== YT.PlayerState.PLAYING) {
@@ -261,35 +261,35 @@ class ClientVideoSyncController {
             } else if (!shouldPlay && this.player.getPlayerState() === YT.PlayerState.PLAYING) {
                 this.player.pauseVideo();
             }
-            
+
             // ✅ Update UI after sync
             setTimeout(() => {
                 updatePlayPauseButton();
             }, 100);
-            
+
             setTimeout(() => {
                 this.stateManager.isReceivingSync = false;
             }, 500);
         }, 100);
     }
-    
+
     setupPeriodicSync() {
         setInterval(() => {
             if (this.stateManager.isSeeking) return;
-            
+
             const timeSinceLastSync = Date.now() - this.stateManager.lastSyncTime;
             if (timeSinceLastSync < 2000) return;
-            
+
             const currentTime = this.player.getCurrentTime();
             if (this.stateManager.shouldSync(currentTime)) {
                 this.socket.emit('request-sync', { roomId: this.roomId });
             }
         }, this.stateManager.SYNC_INTERVAL);
     }
-    
+
     handleUserPlay() {
         this.markEventOrigin(this.eventOrigin.HUMAN);
-        
+
         // ✅ Broadcast IMMEDIATELY before playing (don't wait for onStateChange)
         const currentTime = this.player.getCurrentTime();
         const syncData = {
@@ -300,12 +300,12 @@ class ClientVideoSyncController {
             playbackRate: this.player.getPlaybackRate()
             // quality: Removed - deprecated API method
         };
-        
+
         this.socket.emit('video-state-change', {
             state: syncData,
             roomId: this.roomId
         });
-        
+
         // ✅ If video has ended, seek to beginning before playing
         const state = this.player.getPlayerState();
         if (state === YT.PlayerState.ENDED || state === 0) {
@@ -319,10 +319,10 @@ class ClientVideoSyncController {
             this.player.playVideo();
         }
     }
-    
+
     handleUserPause() {
         this.markEventOrigin(this.eventOrigin.HUMAN);
-        
+
         // ✅ Broadcast IMMEDIATELY before pausing (don't wait for onStateChange)
         const currentTime = this.player.getCurrentTime();
         const syncData = {
@@ -333,39 +333,39 @@ class ClientVideoSyncController {
             playbackRate: this.player.getPlaybackRate()
             // quality: Removed - deprecated API method
         };
-        
+
         this.socket.emit('video-state-change', {
             state: syncData,
             roomId: this.roomId
         });
-        
+
         this.markEventOrigin(this.eventOrigin.NETWORK); // Prevent re-broadcast
         this.player.pauseVideo();
     }
-    
+
     handleSeekStart() {
         this.stateManager.isSeeking = true;
     }
-    
+
     handleSeekEnd(targetTime) {
         // ✅ Use handleUserSeekTo for immediate broadcast approach
         this.handleUserSeekTo(targetTime);
-        
+
         // ✅ Reset seeking state after a short delay
         setTimeout(() => {
             this.stateManager.isSeeking = false;
         }, 100);
     }
-    
+
     // 🎮 Handle User Seek (Rewind/Forward) - Approach tương tự Play/Pause
     handleUserSeek(seconds) {
         this.markEventOrigin(this.eventOrigin.HUMAN);
-        
+
         // ✅ Calculate new time
         const currentTime = this.player.getCurrentTime();
         const duration = this.player.getDuration();
         const newTime = Math.max(0, Math.min(duration, currentTime + seconds));
-        
+
         // ✅ Broadcast IMMEDIATELY before seeking (don't wait for onStateChange)
         const currentState = this.player.getPlayerState();
         const syncData = {
@@ -376,25 +376,25 @@ class ClientVideoSyncController {
             playbackRate: this.player.getPlaybackRate()
             // quality: Removed - deprecated API method
         };
-        
+
         this.socket.emit('video-state-change', {
             state: syncData,
             roomId: this.roomId
         });
-        
+
         // ✅ Mark as network action to prevent re-broadcast
         this.markEventOrigin(this.eventOrigin.NETWORK);
         this.player.seekTo(newTime, true);
     }
-    
+
     // 🎮 Handle User Seek To (Progress Bar Click) - Approach tương tự Play/Pause
     handleUserSeekTo(targetTime) {
         this.markEventOrigin(this.eventOrigin.HUMAN);
-        
+
         // ✅ Clamp target time to valid range
         const duration = this.player.getDuration();
         const newTime = Math.max(0, Math.min(duration, targetTime));
-        
+
         // ✅ Broadcast IMMEDIATELY before seeking (don't wait for onStateChange)
         const currentState = this.player.getPlayerState();
         const syncData = {
@@ -405,26 +405,26 @@ class ClientVideoSyncController {
             playbackRate: this.player.getPlaybackRate()
             // quality: Removed - deprecated API method
         };
-        
+
         this.socket.emit('video-state-change', {
             state: syncData,
             roomId: this.roomId
         });
-        
+
         // ✅ Mark as network action to prevent re-broadcast
         this.markEventOrigin(this.eventOrigin.NETWORK);
         this.player.seekTo(newTime, true);
     }
-    
+
     // 🎮 Handle User Seek To with Known State (Progress Bar Drag)
     // Used when we know the original state before seeking started
     handleUserSeekToWithState(targetTime, originalState) {
         this.markEventOrigin(this.eventOrigin.HUMAN);
-        
+
         // ✅ Clamp target time to valid range
         const duration = this.player.getDuration();
         const newTime = Math.max(0, Math.min(duration, targetTime));
-        
+
         // ✅ Broadcast IMMEDIATELY with ORIGINAL state (before drag started)
         // This ensures other users maintain the correct play/pause state
         const wasPlaying = originalState === YT.PlayerState.PLAYING;
@@ -436,23 +436,23 @@ class ClientVideoSyncController {
             playbackRate: this.player.getPlaybackRate()
             // quality: Removed - deprecated API method
         };
-        
+
         this.socket.emit('video-state-change', {
             state: syncData,
             roomId: this.roomId
         });
-        
+
         // ✅ Mark as network action to prevent re-broadcast
         this.markEventOrigin(this.eventOrigin.NETWORK);
         this.player.seekTo(newTime, true);
-        
+
         // ✅ Restore original play/pause state after seeking
         setTimeout(() => {
             this.markEventOrigin(this.eventOrigin.NETWORK);
             if (wasPlaying && this.player.getPlayerState() !== YT.PlayerState.PLAYING) {
                 this.player.playVideo();
             }
-            
+
             // ✅ Reset seeking state after restoring play state
             setTimeout(() => {
                 this.stateManager.isSeeking = false;
@@ -537,6 +537,9 @@ const qualityBtn = document.getElementById('quality-btn');
 const qualityMenu = document.getElementById('quality-menu');
 const captionBtn = document.getElementById('caption-btn');
 const captionMenu = document.getElementById('caption-menu');
+const audioTrackBtn = document.getElementById('audio-track-btn');
+const audioTrackMenu = document.getElementById('audio-track-menu');
+const customAudioPlayer = document.getElementById('custom-audio-player');
 
 // Custom controls state
 let controlsTimeout = null;
@@ -549,6 +552,11 @@ let currentCaptionTrack = null;
 let currentCaptionLangCode = null; // Store language code to maintain preference across videos
 let availableCaptions = [];
 let availableQualities = [];
+let currentPlayingVideoId = null;
+let currentAudioTrack = 'default';
+let isUserAudioMuted = false;
+let lastAudioDriftCheck = 0;
+let availableAudioTracks = [];
 
 // New elements for enhanced features
 const emojiBtn = document.getElementById('emoji-btn');
@@ -581,7 +589,7 @@ const liveModeText = document.getElementById('live-mode-text');
 const queueCount = document.getElementById('queue-count');
 
 // Initialize app
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     showJoinModal();
     setupEventListeners();
     initializeEmojiPicker();
@@ -595,91 +603,91 @@ function setupEventListeners() {
     joinForm.addEventListener('submit', handleJoinRoom);
     loadVideoBtn.addEventListener('click', handleLoadVideo);
     sendBtn.addEventListener('click', sendMessage);
-    chatInput.addEventListener('keypress', function(e) {
+    chatInput.addEventListener('keypress', function (e) {
         if (e.key === 'Enter') {
             sendMessage();
         }
     });
-    
-    youtubeUrlInput.addEventListener('keypress', function(e) {
+
+    youtubeUrlInput.addEventListener('keypress', function (e) {
         if (e.key === 'Enter') {
             handleLoadVideo();
         }
     });
-    
+
     // 🔥 Chat overlay event listeners
     if (chatOverlayInput) {
-        chatOverlayInput.addEventListener('keypress', function(e) {
+        chatOverlayInput.addEventListener('keypress', function (e) {
             if (e.key === 'Enter') {
                 sendOverlayMessage();
             }
         });
     }
-    
+
     if (chatOverlaySendBtn) {
         chatOverlaySendBtn.addEventListener('click', sendOverlayMessage);
     }
-    
+
     // 🎯 TikTok Style: Scroll detection for auto-scroll logic
     if (chatOverlayMessages) {
         chatOverlayMessages.addEventListener('scroll', handleOverlayScroll);
     }
-    
+
     // 🎯 New Message Indicator click -> Scroll to bottom
     if (newMessageIndicator) {
-        newMessageIndicator.addEventListener('click', function() {
+        newMessageIndicator.addEventListener('click', function () {
             scrollToBottom(chatOverlayMessages);
             hideNewMessageIndicator();
             isUserScrolling = false;
         });
     }
-    
+
     // 🎯 Chat Overlay Toggle button
     if (chatOverlayToggle) {
         let clickStartX = 0;
         let clickStartY = 0;
-        
+
         chatOverlayToggle.addEventListener('mousedown', (e) => {
             clickStartX = e.clientX;
             clickStartY = e.clientY;
             startDragChatOverlay(e);
         });
-        
+
         chatOverlayToggle.addEventListener('click', (e) => {
             // Only toggle if we didn't drag (moved less than 5px)
             const dx = Math.abs(e.clientX - clickStartX);
             const dy = Math.abs(e.clientY - clickStartY);
-            
+
             if (dx < 5 && dy < 5) {
                 toggleChatOverlay();
             }
         });
     }
-    
+
     // 🎯 Chat Overlay Emoji button
     if (chatOverlayEmojiBtn) {
         chatOverlayEmojiBtn.addEventListener('click', toggleOverlayEmojiPicker);
     }
-    
+
     // 🎯 Make chat overlay draggable when clicking on messages area
     if (chatOverlayMessages) {
         chatOverlayMessages.addEventListener('mousedown', startDragChatOverlay);
     }
-    
+
     // 🎯 Global drag handlers
     document.addEventListener('mousemove', dragChatOverlay);
     document.addEventListener('mouseup', stopDragChatOverlay);
-    
+
     // 🔥 Fullscreen change detection
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
     document.addEventListener('mozfullscreenchange', handleFullscreenChange);
     document.addEventListener('MSFullscreenChange', handleFullscreenChange);
-    
+
     function handleFullscreenChange() {
         const inFullscreen = isFullscreen();
         showChatOverlay(inFullscreen);
-        
+
         if (inFullscreen) {
             // ✅ FIX: Initialize scroll state properly when entering fullscreen
             setTimeout(() => {
@@ -688,12 +696,12 @@ function setupEventListeners() {
                     isUserScrolling = false;
                     newMessagesPending = 0;
                     hideNewMessageIndicator();
-                    
+
                     // Set initial state to idle
                     chatOverlayMessages.classList.remove('scrolling');
                     chatOverlayMessages.classList.add('idle');
                 }
-                
+
                 // Focus overlay input when entering fullscreen
                 if (chatOverlayInput) {
                     chatOverlayInput.focus();
@@ -704,7 +712,7 @@ function setupEventListeners() {
             isUserScrolling = false;
             isChatCollapsed = false;
             unreadMessages = 0;
-            
+
             // 📱 Also clean up iOS fullscreen if exiting via native API
             if (videoContainer && videoContainer.classList.contains('is-ios-fullscreen')) {
                 exitIOSFullscreen();
@@ -721,19 +729,19 @@ function setupEventListeners() {
     closePmModal.addEventListener('click', hidePrivateMessageModal);
     closeFileModal.addEventListener('click', hideFilePreviewModal);
     sendPmBtn.addEventListener('click', sendPrivateMessage);
-    pmInput.addEventListener('keypress', function(e) {
+    pmInput.addEventListener('keypress', function (e) {
         if (e.key === 'Enter') {
             sendPrivateMessage();
         }
     });
 
     // Click outside to close emoji picker
-    document.addEventListener('click', function(e) {
+    document.addEventListener('click', function (e) {
         // Hide main emoji picker
         if (!emojiPicker.contains(e.target) && !emojiBtn.contains(e.target)) {
             hideEmojiPicker();
         }
-        
+
         // Hide overlay emoji picker
         if (chatOverlayEmojiPicker && chatOverlayEmojiBtn) {
             if (!chatOverlayEmojiPicker.contains(e.target) && !chatOverlayEmojiBtn.contains(e.target)) {
@@ -743,13 +751,13 @@ function setupEventListeners() {
     });
 
     // Prevent emoji picker from closing when clicking inside it
-    emojiPicker.addEventListener('click', function(e) {
+    emojiPicker.addEventListener('click', function (e) {
         e.stopPropagation();
     });
-    
+
     // Prevent overlay emoji picker from closing when clicking inside it
     if (chatOverlayEmojiPicker) {
-        chatOverlayEmojiPicker.addEventListener('click', function(e) {
+        chatOverlayEmojiPicker.addEventListener('click', function (e) {
             e.stopPropagation();
         });
     }
@@ -773,19 +781,19 @@ function hideJoinModal() {
 // Handle join room
 function handleJoinRoom(e) {
     e.preventDefault();
-    
+
     const username = usernameInput.value.trim();
     const roomId = roomIdInput.value.trim() || generateRoomId();
     const adminPassword = adminPasswordInput.value.trim();
-    
+
     if (!username) {
         alert('Vui lòng nhập tên của bạn!');
         return;
     }
-    
+
     currentUser = username;
     currentRoom = roomId;
-    
+
     showLoading();
     connectToServer(username, roomId, adminPassword);
 }
@@ -798,18 +806,18 @@ function generateRoomId() {
 // Connect to server
 function connectToServer(username, roomId, adminPassword) {
     socket = io();
-    
+
     socket.on('connect', () => {
         socket.emit('join-room', { username, roomId, adminPassword });
-        
+
         hideLoading();
         hideJoinModal();
     });
-    
+
     socket.on('disconnect', () => {
         showNotification('Mất kết nối với server!', 'error');
     });
-    
+
     setupSocketListeners();
 }
 
@@ -821,7 +829,7 @@ function setupSocketListeners() {
         // 🔥 Also display in overlay if in fullscreen
         displayOverlayMessage(data);
     });
-    
+
     // User joined/left
     socket.on('user-joined', (data) => {
         displaySystemMessage(data.message);
@@ -833,7 +841,7 @@ function setupSocketListeners() {
             timestamp: new Date().toLocaleTimeString('vi-VN')
         });
     });
-    
+
     socket.on('user-left', (data) => {
         displaySystemMessage(data.message);
         // 🔥 Also display in overlay
@@ -844,7 +852,7 @@ function setupSocketListeners() {
             timestamp: new Date().toLocaleTimeString('vi-VN')
         });
     });
-    
+
     // 🎮 Admin controls sync
     socket.on('playback-speed-change', (data) => {
         if (!isAdmin && data.speed) {
@@ -852,14 +860,14 @@ function setupSocketListeners() {
             displaySystemMessage(`Admin đổi tốc độ phát: ${data.speed}x`);
         }
     });
-    
+
     // Quality change socket listener - DISABLED (deprecated API)
     // Quality is now auto-managed by YouTube
     socket.on('video-quality-change', (data) => {
         // No longer supported - quality control is deprecated
         displaySystemMessage('⚠️ Chất lượng video tự động bởi YouTube');
     });
-    
+
     socket.on('caption-change', (data) => {
         if (!isAdmin) {
             if (data.track === 'off') {
@@ -874,13 +882,25 @@ function setupSocketListeners() {
                     }
                 }
                 setCaptions(targetIndex, false);
-                const captionText = (availableCaptions && availableCaptions[targetIndex]?.displayName) || 
-                                    (availableCaptions && availableCaptions[targetIndex]?.languageName) || 'Bật';
+                const captionText = (availableCaptions && availableCaptions[targetIndex]?.displayName) ||
+                    (availableCaptions && availableCaptions[targetIndex]?.languageName) || 'Bật';
                 displaySystemMessage(`Admin đổi phụ đề: ${captionText}`);
             }
         }
     });
-    
+
+    socket.on('audio-track-changed', (data) => {
+        if (!isAdmin) {
+            if (data.trackId === 'default' || !data.trackId) {
+                setAudioTrack('default', false);
+                displaySystemMessage('Admin đã chuyển về âm thanh mặc định');
+            } else {
+                setAudioTrack(data.trackId, false);
+                displaySystemMessage(`Admin đổi audio track: ${data.displayName || data.trackId}`);
+            }
+        }
+    });
+
     // User count and list
     socket.on('user-count', (count) => {
         userCountDisplay.textContent = `${count} người online`;
@@ -890,7 +910,7 @@ function setupSocketListeners() {
         usersData = users;
         updateUsersList();
     });
-    
+
     // Private messages
     socket.on('private-message', (data) => {
         displayPrivateMessage(data);
@@ -902,20 +922,20 @@ function setupSocketListeners() {
         adminId = data.adminId;
         isLiveMode = data.isLiveMode;
         videoQueue = data.videoQueue;
-        
+
         updateAdminUI();
         updateQueueDisplay();
-        
+
         // 🎮 Show/hide admin controls
         if (isAdmin) {
             document.body.classList.add('is-admin');
         } else {
             document.body.classList.remove('is-admin');
         }
-        
+
         // 🎮 Update live mode UI (hide play/pause/rewind/forward for users)
         updateLiveModeUI();
-        
+
         const userPrefix = isAdmin ? '👑 Admin' : '';
         currentUserDisplay.textContent = `${userPrefix} ${currentUser}`;
         roomIdDisplay.textContent = `Phòng: ${currentRoom}`;
@@ -935,25 +955,25 @@ function setupSocketListeners() {
 
     // Xử lý khi admin rời khỏi phòng
     socket.on('admin-left-room', (data) => {
-        
+
         // Hiển thị thông báo
         showNotification(data.message, 'warning');
         displaySystemMessage(data.message);
-        
+
         // Dọn dẹp trạng thái hiện tại
         cleanupRoomState();
-        
+
         // Chuyển hướng về trang chủ sau 3 giây
         setTimeout(() => {
             redirectToHomePage();
         }, 3000);
     });
-    
+
     // Video events
     socket.on('video-changed', (data) => {
         loadYouTubeVideo(data.videoId);
     });
-    
+
     socket.on('video-loaded', (data) => {
         loadYouTubeVideo(data.videoId);
         if (data.state && player) {
@@ -962,7 +982,7 @@ function setupSocketListeners() {
             }, 1000);
         }
     });
-    
+
     socket.on('video-state-sync', (state) => {
         if (videoSyncController) {
             videoSyncController.receiveSync(state);
@@ -970,7 +990,7 @@ function setupSocketListeners() {
             syncVideoState(state);
         }
     });
-    
+
     // ✅ NEW: Handle sync response
     socket.on('sync-response', (state) => {
         if (videoSyncController) {
@@ -992,19 +1012,19 @@ function setupSocketListeners() {
 function displayMessage(data) {
     const messageDiv = document.createElement('div');
     let messageClass = 'message';
-    
+
     if (data.isSystem) {
         messageClass += ' system';
     } else if (data.messageType === 'file') {
         messageClass += ' file';
     }
-    
+
     if (data.username === currentUser && !data.isSystem) {
         messageClass += ' own';
     }
-    
+
     messageDiv.className = messageClass;
-    
+
     let messageContent = '';
     if (data.messageType === 'file') {
         messageContent = createFileMessageContent(data);
@@ -1017,11 +1037,11 @@ function displayMessage(data) {
             <div class="message-content">${escapeHtml(data.message)}</div>
         `;
     }
-    
+
     messageDiv.innerHTML = messageContent;
     chatMessages.appendChild(messageDiv);
     chatMessages.scrollTop = chatMessages.scrollHeight;
-    
+
     // Remove welcome message if exists
     const welcomeMessage = chatMessages.querySelector('.welcome-message');
     if (welcomeMessage) {
@@ -1043,24 +1063,24 @@ function displaySystemMessage(message) {
 function displayOverlayMessage(data) {
     // Skip if data is invalid or overlay doesn't exist
     if (!data || !chatOverlayMessages) return;
-    
+
     // Skip file messages in overlay (too complex for overlay display)
     if (data.messageType === 'file') return;
-    
+
     const messageDiv = document.createElement('div');
     let messageClass = 'chat-overlay-message';
-    
+
     if (data.isSystem) {
         messageClass += ' system';
     } else if (data.username === currentUser && !data.isSystem) {
         messageClass += ' own';
     }
-    
+
     messageDiv.className = messageClass;
-    
+
     // Get timestamp - use data.timestamp if available, otherwise generate new one
     const timestamp = data.timestamp || getFormattedTime();
-    
+
     // 🎨 Generate unique color for each user (not for own messages or system)
     if (!data.isSystem && data.username !== currentUser) {
         const userColor = getUserColor(data.username);
@@ -1068,7 +1088,7 @@ function displayOverlayMessage(data) {
         messageDiv.style.borderColor = userColor.border;
         messageDiv.style.border = `1px solid ${userColor.border}`;
     }
-    
+
     // Create message content with timestamp
     if (data.isSystem) {
         messageDiv.innerHTML = `
@@ -1080,17 +1100,17 @@ function displayOverlayMessage(data) {
         const userColor = !data.isSystem && data.username !== currentUser ? getUserColor(data.username) : null;
         const usernameColor = userColor ? userColor.primary : '';
         const usernameStyle = usernameColor ? `style="color: ${usernameColor};"` : '';
-        
+
         messageDiv.innerHTML = `
             <span class="chat-overlay-message-username" ${usernameStyle}>${escapeHtml(data.username)}:</span>
             <span class="chat-overlay-message-content">${escapeHtml(data.message)}</span>
             <span class="chat-overlay-message-timestamp">${timestamp}</span>
         `;
     }
-    
+
     // Add to overlay
     chatOverlayMessages.appendChild(messageDiv);
-    
+
     // 🎯 Handle unread messages when chat is collapsed
     if (isChatCollapsed) {
         unreadMessages++;
@@ -1106,13 +1126,13 @@ function displayOverlayMessage(data) {
             showNewMessageIndicator();
         }
     }
-    
+
     // Keep only last 50 messages (increased from 20 for better history)
     const messages = chatOverlayMessages.querySelectorAll('.chat-overlay-message');
     if (messages.length > 50) {
         messages[0].remove();
     }
-    
+
     // ❌ TikTok Style: NO auto-fade - messages stay until scrolled away
     // Users can scroll up to read history at any time
 }
@@ -1136,7 +1156,7 @@ function isAtBottom(element) {
 // 🎯 Show "New Message" indicator (Facebook Live style)
 function showNewMessageIndicator() {
     if (!newMessageIndicator) return;
-    
+
     // Update text with count if there are pending messages, otherwise show "Back to latest"
     let countText;
     if (newMessagesPending > 0) {
@@ -1145,7 +1165,7 @@ function showNewMessageIndicator() {
         countText = 'Về tin nhắn mới nhất';
     }
     newMessageIndicator.querySelector('span').textContent = countText;
-    
+
     // Show indicator
     newMessageIndicator.classList.add('visible');
 }
@@ -1153,7 +1173,7 @@ function showNewMessageIndicator() {
 // 🎯 Hide "New Message" indicator
 function hideNewMessageIndicator() {
     if (!newMessageIndicator) return;
-    
+
     newMessageIndicator.classList.remove('visible');
     newMessagesPending = 0;
 }
@@ -1161,12 +1181,12 @@ function hideNewMessageIndicator() {
 // 🎯 Handle scroll event (detect user scrolling)
 function handleOverlayScroll() {
     if (!chatOverlayMessages) return;
-    
+
     // Clear existing timeout
     if (scrollTimeout) {
         clearTimeout(scrollTimeout);
     }
-    
+
     // Check if user is at bottom
     if (isAtBottom(chatOverlayMessages)) {
         // User scrolled to bottom
@@ -1182,7 +1202,7 @@ function handleOverlayScroll() {
         // Always show indicator when user scrolls up
         showNewMessageIndicator();
     }
-    
+
     // Reset to idle after 2 seconds of no scrolling (if at bottom)
     scrollTimeout = setTimeout(() => {
         if (isAtBottom(chatOverlayMessages)) {
@@ -1196,9 +1216,9 @@ function handleOverlayScroll() {
 // 🎯 Toggle chat visibility
 function toggleChatOverlay() {
     if (!chatOverlay) return;
-    
+
     isChatCollapsed = !isChatCollapsed;
-    
+
     if (isChatCollapsed) {
         // Collapse chat
         chatOverlay.classList.add('collapsed');
@@ -1213,11 +1233,11 @@ function toggleChatOverlay() {
             const icon = chatOverlayToggle.querySelector('i');
             if (icon) icon.className = 'fas fa-comment';
         }
-        
+
         // Clear unread count and scroll to bottom
         unreadMessages = 0;
         updateChatBadge();
-        
+
         // Scroll to bottom after expanding
         setTimeout(() => {
             scrollToBottom(chatOverlayMessages);
@@ -1229,7 +1249,7 @@ function toggleChatOverlay() {
 // 🎯 Update chat badge (unread count)
 function updateChatBadge() {
     if (!chatBadge) return;
-    
+
     if (unreadMessages > 0) {
         chatBadge.style.display = 'flex';
         chatBadge.textContent = unreadMessages > 99 ? '99+' : unreadMessages;
@@ -1242,12 +1262,12 @@ function updateChatBadge() {
 function sendOverlayMessage() {
     const message = chatOverlayInput.value.trim();
     if (!message || !socket) return;
-    
+
     socket.emit('chat-message', {
         message: message,
         roomId: currentRoom
     });
-    
+
     chatOverlayInput.value = '';
 }
 
@@ -1266,15 +1286,15 @@ function showOverlayEmojiPicker() {
     if (!chatOverlayEmojiPicker) return;
     chatOverlayEmojiPicker.classList.remove('hidden');
     chatOverlayEmojiBtn.classList.add('active');
-    
+
     // Populate emojis if not already done
     if (chatOverlayEmojiGrid && chatOverlayEmojiGrid.children.length === 0) {
         populateOverlayEmojis('smileys');
-        
+
         // Add category click handlers
         const categories = chatOverlayEmojiPicker.querySelectorAll('.emoji-category');
         categories.forEach(cat => {
-            cat.addEventListener('click', function() {
+            cat.addEventListener('click', function () {
                 categories.forEach(c => c.classList.remove('active'));
                 this.classList.add('active');
                 populateOverlayEmojis(this.dataset.category);
@@ -1295,7 +1315,7 @@ function populateOverlayEmojis(category) {
     if (!chatOverlayEmojiGrid) return;
     chatOverlayEmojiGrid.innerHTML = '';
     const emojis = emojiData[category] || emojiData.smileys;
-    
+
     emojis.forEach(emoji => {
         const emojiBtn = document.createElement('button');
         emojiBtn.className = 'emoji-item';
@@ -1313,21 +1333,21 @@ function insertOverlayEmoji(emoji) {
     const cursorPos = chatOverlayInput.selectionStart;
     const textBefore = chatOverlayInput.value.substring(0, cursorPos);
     const textAfter = chatOverlayInput.value.substring(chatOverlayInput.selectionEnd);
-    
+
     chatOverlayInput.value = textBefore + emoji + textAfter;
     chatOverlayInput.focus();
-    
+
     // Set cursor position after emoji
     const newPos = cursorPos + emoji.length;
     chatOverlayInput.setSelectionRange(newPos, newPos);
-    
+
     hideOverlayEmojiPicker();
 }
 
 // 🔥 Show/hide chat overlay visibility in fullscreen
 function showChatOverlay(show) {
     if (!chatOverlay) return;
-    
+
     if (show) {
         chatOverlay.classList.remove('hidden');
     } else {
@@ -1338,11 +1358,11 @@ function showChatOverlay(show) {
 // 🎯 Start dragging chat overlay
 function startDragChatOverlay(e) {
     if (!chatOverlay) return;
-    
+
     // Don't drag when clicking on input or send button
     if (e.target === chatOverlayInput || e.target === chatOverlaySendBtn) return;
     if (e.target.closest('.chat-overlay-input-container')) return;
-    
+
     // Don't drag when clicking inside messages (for scrolling/selecting text)
     // Unless it's the toggle button
     if (e.target !== chatOverlayToggle && !e.target.closest('#chat-overlay-toggle')) {
@@ -1351,18 +1371,18 @@ function startDragChatOverlay(e) {
             if (!e.shiftKey) return;
         }
     }
-    
+
     isDragging = true;
-    
+
     // Get current position or use computed style
     const rect = chatOverlay.getBoundingClientRect();
     dragOffsetX = e.clientX - rect.left;
     dragOffsetY = e.clientY - rect.top;
-    
+
     // Add dragging cursor
     chatOverlay.style.cursor = 'grabbing';
     if (chatOverlayToggle) chatOverlayToggle.style.cursor = 'grabbing';
-    
+
     // Prevent text selection while dragging
     e.preventDefault();
 }
@@ -1370,28 +1390,28 @@ function startDragChatOverlay(e) {
 // 🎯 Drag chat overlay
 function dragChatOverlay(e) {
     if (!isDragging || !chatOverlay) return;
-    
+
     // Calculate new position
     let newX = e.clientX - dragOffsetX;
     let newY = e.clientY - dragOffsetY;
-    
+
     // Get container bounds (video container or window)
     const container = videoContainer || document.body;
     const containerRect = container.getBoundingClientRect();
     const overlayRect = chatOverlay.getBoundingClientRect();
-    
+
     // Constrain to container bounds
     const maxX = containerRect.width - overlayRect.width;
     const maxY = containerRect.height - overlayRect.height;
-    
+
     newX = Math.max(0, Math.min(newX, maxX));
     newY = Math.max(0, Math.min(newY, maxY));
-    
+
     // Apply position
     chatOverlay.style.left = newX + 'px';
     chatOverlay.style.bottom = 'auto';
     chatOverlay.style.top = newY + 'px';
-    
+
     // Save position
     chatPosition.x = newX;
     chatPosition.y = newY;
@@ -1400,13 +1420,13 @@ function dragChatOverlay(e) {
 // 🎯 Stop dragging chat overlay
 function stopDragChatOverlay(e) {
     if (!isDragging) return;
-    
+
     isDragging = false;
-    
+
     // Restore cursor
     if (chatOverlay) chatOverlay.style.cursor = '';
     if (chatOverlayToggle) chatOverlayToggle.style.cursor = 'pointer';
-    
+
     // Prevent click event from firing if we dragged
     if (e.target === chatOverlayToggle && (Math.abs(dragOffsetX) > 5 || Math.abs(dragOffsetY) > 5)) {
         e.stopPropagation();
@@ -1422,10 +1442,10 @@ function isFullscreen() {
         document.mozFullScreenElement ||
         document.msFullscreenElement
     );
-    
+
     // Also check for iOS/Mobile CSS fallback mode
     const iOSFullscreen = videoContainer && videoContainer.classList.contains('is-ios-fullscreen');
-    
+
     return nativeFullscreen || iOSFullscreen;
 }
 
@@ -1433,12 +1453,12 @@ function isFullscreen() {
 function sendMessage() {
     const message = chatInput.value.trim();
     if (!message) return;
-    
+
     socket.emit('chat-message', {
         message: message,
         roomId: currentRoom
     });
-    
+
     chatInput.value = '';
 }
 
@@ -1449,22 +1469,22 @@ function handleLoadVideo() {
         alert('Vui lòng nhập link YouTube!');
         return;
     }
-    
+
     const videoId = extractVideoId(url);
     if (!videoId) {
         alert('Link YouTube không hợp lệ!');
         return;
     }
-    
+
     // Get video title (simplified)
     const videoTitle = getVideoTitleFromUrl(url);
-    
+
     socket.emit('change-video', {
         videoId: videoId,
         videoTitle: videoTitle,
         roomId: currentRoom
     });
-    
+
     youtubeUrlInput.value = '';
 }
 
@@ -1489,48 +1509,48 @@ function onYouTubeIframeAPIReady() {
 // 🎮 Initialize Custom Controls
 function initializeCustomControls() {
     if (!customControls) return;
-    
+
     // Play/Pause button
     if (playPauseBtn) playPauseBtn.addEventListener('click', togglePlayPause);
-    
+
     // Rewind/Forward buttons
     if (rewindBtn) rewindBtn.addEventListener('click', () => seekRelative(-10));
     if (forwardBtn) forwardBtn.addEventListener('click', () => seekRelative(10));
-    
+
     // Volume controls
     if (volumeBtn) volumeBtn.addEventListener('click', toggleMute);
     if (volumeSlider) volumeSlider.addEventListener('input', handleVolumeChange);
-    
+
     // Fullscreen button
     if (fullscreenBtn) fullscreenBtn.addEventListener('click', toggleFullscreen);
-    
+
     // Progress bar seeking
     if (progressBar) {
         progressBar.addEventListener('mousedown', startSeeking);
         progressBar.addEventListener('click', handleProgressClick);
     }
-    
+
     // Video click overlay (click anywhere to play/pause)
     if (videoClickOverlay) videoClickOverlay.addEventListener('click', handleVideoClick);
-    
+
     // Mouse movement detection for auto-hide controls
     if (videoContainer) {
         videoContainer.addEventListener('mousemove', showControlsTemporarily);
         videoContainer.addEventListener('mouseleave', hideControls);
     }
-    
+
     // Keyboard shortcuts
     document.addEventListener('keydown', handleKeyboardShortcuts);
-    
+
     // Update progress bar continuously
     setInterval(updateProgressBar, 100);
-    
+
     // Update fullscreen button on fullscreen change
     document.addEventListener('fullscreenchange', updateFullscreenButton);
     document.addEventListener('webkitfullscreenchange', updateFullscreenButton);
     document.addEventListener('mozfullscreenchange', updateFullscreenButton);
     document.addEventListener('MSFullscreenChange', updateFullscreenButton);
-    
+
     // Speed control
     if (speedBtn) {
         speedBtn.addEventListener('click', (e) => {
@@ -1538,7 +1558,7 @@ function initializeCustomControls() {
             toggleSpeedMenu();
         });
     }
-    
+
     if (speedMenu) {
         const speedOptions = speedMenu.querySelectorAll('.speed-option');
         speedOptions.forEach(option => {
@@ -1549,7 +1569,7 @@ function initializeCustomControls() {
             });
         });
     }
-    
+
     // Quality control - DISABLED (deprecated API)
     // Quality is now auto-managed by YouTube
     if (qualityBtn) {
@@ -1559,18 +1579,18 @@ function initializeCustomControls() {
             // Show message that quality is auto-managed
             displaySystemMessage('⚠️ Chất lượng video tự động bởi YouTube (không thể điều chỉnh thủ công)');
         });
-        
+
         // Update button style to indicate it's read-only
         qualityBtn.style.opacity = '0.7';
         qualityBtn.style.cursor = 'not-allowed';
         qualityBtn.title = 'Chất lượng tự động (không thể thay đổi)';
     }
-    
+
     // Hide quality menu since we can't change quality manually
     if (qualityMenu) {
         qualityMenu.style.display = 'none';
     }
-    
+
     // Caption control
     if (captionBtn) {
         captionBtn.addEventListener('click', (e) => {
@@ -1578,7 +1598,7 @@ function initializeCustomControls() {
             toggleCaptionMenu();
         });
     }
-    
+
     if (captionMenu) {
         // "Off" option listener
         const offOption = captionMenu.querySelector('[data-track="off"]');
@@ -1589,27 +1609,46 @@ function initializeCustomControls() {
             });
         }
     }
-    
+
+    // Audio track control
+    if (audioTrackBtn) {
+        audioTrackBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleAudioTrackMenu();
+        });
+    }
+
+    if (audioTrackMenu) {
+        const defaultOption = audioTrackMenu.querySelector('[data-track="default"]');
+        if (defaultOption) {
+            defaultOption.addEventListener('click', () => {
+                setAudioTrack('default');
+                toggleAudioTrackMenu();
+            });
+        }
+    }
+
     // Close menus when clicking outside
     document.addEventListener('click', (e) => {
-        if (!e.target.closest('.speed-control') && 
-            !e.target.closest('.quality-control') && 
-            !e.target.closest('.caption-control')) {
+        if (!e.target.closest('.speed-control') &&
+            !e.target.closest('.quality-control') &&
+            !e.target.closest('.caption-control') &&
+            !e.target.closest('.audio-track-control')) {
             closeAllMenus();
         }
     });
-    
+
 }
 
 // 🎮 Toggle Play/Pause
 function togglePlayPause() {
     if (!player || !isPlayerReady) return;
-    
+
     // 🔥 Block User interaction in Live Mode
     if (isLiveMode && !isAdmin) {
         return;
     }
-    
+
     const state = player.getPlayerState();
     if (state === YT.PlayerState.PLAYING) {
         if (videoSyncController) {
@@ -1624,17 +1663,17 @@ function togglePlayPause() {
             player.playVideo();
         }
     }
-    
+
     updatePlayPauseButton();
 }
 
 // 🎮 Update Play/Pause button icon
 function updatePlayPauseButton() {
     if (!player || !isPlayerReady || !playPauseBtn) return;
-    
+
     const state = player.getPlayerState();
     const icon = playPauseBtn.querySelector('i');
-    
+
     if (icon) {
         if (state === YT.PlayerState.PLAYING) {
             icon.className = 'fas fa-pause';
@@ -1647,12 +1686,12 @@ function updatePlayPauseButton() {
 // 🎮 Seek relative (forward/backward)
 function seekRelative(seconds) {
     if (!player || !isPlayerReady) return;
-    
+
     // 🔥 Block User interaction in Live Mode
     if (isLiveMode && !isAdmin) {
         return;
     }
-    
+
     // ✅ Use videoSyncController with immediate broadcast approach
     if (videoSyncController) {
         videoSyncController.handleUserSeek(seconds);
@@ -1667,7 +1706,16 @@ function seekRelative(seconds) {
 // 🎮 Toggle Mute
 function toggleMute() {
     if (!player || !isPlayerReady) return;
-    
+
+    if (currentAudioTrack !== 'default' && customAudioPlayer) {
+        isUserAudioMuted = !isUserAudioMuted;
+        customAudioPlayer.muted = isUserAudioMuted;
+        const targetVol = isUserAudioMuted ? 0 : (lastVolume || 100);
+        updateVolumeIcon(targetVol);
+        if (volumeSlider) volumeSlider.value = targetVol;
+        return;
+    }
+
     if (player.isMuted()) {
         player.unMute();
         player.setVolume(lastVolume);
@@ -1684,26 +1732,36 @@ function toggleMute() {
 // 🎮 Handle volume change
 function handleVolumeChange(e) {
     if (!player || !isPlayerReady) return;
-    
+
     const volume = parseInt(e.target.value);
+
+    if (currentAudioTrack !== 'default' && customAudioPlayer) {
+        customAudioPlayer.volume = Math.max(0, Math.min(1, volume / 100));
+        customAudioPlayer.muted = volume === 0;
+        isUserAudioMuted = volume === 0;
+        if (volume > 0) lastVolume = volume;
+        updateVolumeIcon(volume);
+        return;
+    }
+
     player.setVolume(volume);
-    
+
     if (volume === 0) {
         player.mute();
     } else {
         player.unMute();
         lastVolume = volume;
     }
-    
+
     updateVolumeIcon(volume);
 }
 
 // 🎮 Update volume icon
 function updateVolumeIcon(volume) {
     if (!volumeBtn) return;
-    
+
     const icon = volumeBtn.querySelector('i');
-    
+
     if (icon) {
         if (volume === 0) {
             icon.className = 'fas fa-volume-mute';
@@ -1719,13 +1777,13 @@ function updateVolumeIcon(volume) {
 // 📱 iOS Safari & Mobile Fallback: Use CSS-based fullscreen for unsupported browsers
 function toggleFullscreen() {
     if (!videoContainer) return;
-    
+
     // 📱 Detect iOS Safari and mobile browsers that don't support Fullscreen API on divs
     const isIOSSafari = /iPhone|iPad|iPod/.test(navigator.userAgent) && !window.MSStream;
     const isMobileSafari = /Safari/.test(navigator.userAgent) && /Mobile/.test(navigator.userAgent);
     const isMobileChrome = /Chrome/.test(navigator.userAgent) && /Mobile/.test(navigator.userAgent);
     const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    
+
     // 📱 Check if Fullscreen API is supported for divs (not just video elements)
     const supportsFullscreenAPI = !!(
         videoContainer.requestFullscreen ||
@@ -1733,7 +1791,7 @@ function toggleFullscreen() {
         videoContainer.mozRequestFullScreen ||
         videoContainer.msRequestFullscreen
     );
-    
+
     // 📱 iOS Safari and some mobile browsers: Use CSS fallback
     if ((isIOSSafari || isMobileSafari || (isMobile && !supportsFullscreenAPI))) {
         if (!videoContainer.classList.contains('is-ios-fullscreen')) {
@@ -1745,7 +1803,7 @@ function toggleFullscreen() {
         }
         return;
     }
-    
+
     // 🖥️ Desktop and Android/Mobile browsers with Fullscreen API support
     if (!isFullscreen()) {
         // Request fullscreen on WRAPPER div (contains video + overlay + controls)
@@ -1781,14 +1839,14 @@ function toggleFullscreen() {
 // 📱 Enter iOS/Mobile CSS-based Fullscreen Mode
 function enterIOSFullscreen() {
     if (!videoContainer) return;
-    
+
     // Add CSS class for iOS fullscreen
     videoContainer.classList.add('is-ios-fullscreen');
     document.body.classList.add('ios-fullscreen-active');
-    
+
     // Show chat overlay (simulate fullscreen behavior)
     showChatOverlay(true);
-    
+
     // Initialize chat overlay state
     setTimeout(() => {
         if (chatOverlayMessages) {
@@ -1796,55 +1854,55 @@ function enterIOSFullscreen() {
             isUserScrolling = false;
             newMessagesPending = 0;
             hideNewMessageIndicator();
-            
+
             chatOverlayMessages.classList.remove('scrolling');
             chatOverlayMessages.classList.add('idle');
         }
-        
+
         // Focus overlay input
         if (chatOverlayInput) {
             chatOverlayInput.focus();
         }
     }, 300);
-    
+
     // Update fullscreen button icon
     updateFullscreenButton();
-    
+
     // Prevent body scrolling
     document.body.style.overflow = 'hidden';
-    
+
 }
 
 // 📱 Exit iOS/Mobile CSS-based Fullscreen Mode
 function exitIOSFullscreen() {
     if (!videoContainer) return;
-    
+
     // Remove CSS class for iOS fullscreen
     videoContainer.classList.remove('is-ios-fullscreen');
     document.body.classList.remove('ios-fullscreen-active');
-    
+
     // Hide chat overlay
     showChatOverlay(false);
-    
+
     // Reset state
     isUserScrolling = false;
     isChatCollapsed = false;
     unreadMessages = 0;
-    
+
     // Update fullscreen button icon
     updateFullscreenButton();
-    
+
     // Restore body scrolling
     document.body.style.overflow = '';
-    
+
 }
 
 // 🎮 Update fullscreen button icon
 function updateFullscreenButton() {
     if (!fullscreenBtn) return;
-    
+
     const icon = fullscreenBtn.querySelector('i');
-    
+
     if (icon) {
         if (isFullscreen()) {
             icon.className = 'fas fa-compress';
@@ -1857,20 +1915,20 @@ function updateFullscreenButton() {
 // 🎮 Start seeking (mousedown on progress bar)
 function startSeeking(e) {
     isSeeking = true;
-    
+
     // ✅ Save current player state before seeking
     // This ensures we restore the correct play/pause state after drag
     if (player && isPlayerReady) {
         stateBeforeSeeking = player.getPlayerState();
     }
-    
+
     // ✅ Notify sync controller
     if (videoSyncController) {
         videoSyncController.handleSeekStart();
     }
-    
+
     handleProgressClick(e);
-    
+
     document.addEventListener('mousemove', handleSeeking);
     document.addEventListener('mouseup', stopSeeking);
 }
@@ -1884,14 +1942,14 @@ function handleSeeking(e) {
 // 🎮 Stop seeking (mouseup)
 function stopSeeking(e) {
     if (!isSeeking) return;
-    
+
     // ✅ Get final seek position and broadcast with original state
     if (player && isPlayerReady && progressBar && videoSyncController) {
         const rect = progressBar.getBoundingClientRect();
         const pos = (e.clientX - rect.left) / rect.width;
         const duration = player.getDuration();
         const targetTime = pos * duration;
-        
+
         // ✅ Use the state saved BEFORE drag started to maintain play/pause consistency
         if (stateBeforeSeeking !== null) {
             videoSyncController.handleUserSeekToWithState(targetTime, stateBeforeSeeking);
@@ -1900,12 +1958,12 @@ function stopSeeking(e) {
             videoSyncController.handleSeekEnd(targetTime);
         }
     }
-    
+
     isSeeking = false;
     stateBeforeSeeking = null; // Reset saved state
     document.removeEventListener('mousemove', handleSeeking);
     document.removeEventListener('mouseup', stopSeeking);
-    
+
     // ✅ Update progress bar immediately after seeking completes
     setTimeout(() => {
         updateProgressBar();
@@ -1915,17 +1973,17 @@ function stopSeeking(e) {
 // 🎮 Handle progress bar click
 function handleProgressClick(e) {
     if (!player || !isPlayerReady || !progressBar) return;
-    
+
     // 🔥 Block User interaction in Live Mode
     if (isLiveMode && !isAdmin) {
         return;
     }
-    
+
     const rect = progressBar.getBoundingClientRect();
     const pos = (e.clientX - rect.left) / rect.width;
     const duration = player.getDuration();
     const newTime = pos * duration;
-    
+
     // ✅ If NOT in seeking mode (single click), broadcast immediately and seek
     if (!isSeeking && videoSyncController) {
         // Single click - use immediate broadcast approach
@@ -1944,19 +2002,19 @@ function handleProgressClick(e) {
 // 🎮 Update progress bar
 function updateProgressBar() {
     if (!player || !isPlayerReady || !progressFilled || !progressHandle) return;
-    
+
     // ✅ Don't update progress bar while user is dragging
     if (isSeeking) return;
-    
+
     try {
         const currentTime = player.getCurrentTime();
         const duration = player.getDuration();
-        
+
         if (duration > 0) {
             const percentage = (currentTime / duration) * 100;
             progressFilled.style.width = percentage + '%';
             progressHandle.style.left = percentage + '%';
-            
+
             // Update time displays
             if (currentTimeDisplay) currentTimeDisplay.textContent = formatTime(currentTime);
             if (durationDisplay) durationDisplay.textContent = formatTime(duration);
@@ -1964,21 +2022,24 @@ function updateProgressBar() {
     } catch (error) {
         // Ignore errors when player is not ready
     }
-    
+
     // Update play/pause button
     updatePlayPauseButton();
+
+    // Đồng bộ custom audio player nếu có track riêng
+    syncCustomAudioWithPlayer();
 }
 
 // 🎮 Update progress bar visual only (without querying player state)
 // Used during drag to show seek position without actually seeking
 function updateProgressBarVisual(currentTime, duration) {
     if (!progressFilled || !progressHandle) return;
-    
+
     if (duration > 0) {
         const percentage = (currentTime / duration) * 100;
         progressFilled.style.width = percentage + '%';
         progressHandle.style.left = percentage + '%';
-        
+
         // Update time displays
         if (currentTimeDisplay) currentTimeDisplay.textContent = formatTime(currentTime);
         if (durationDisplay) durationDisplay.textContent = formatTime(duration);
@@ -1996,13 +2057,13 @@ function formatTime(seconds) {
 // 🎮 Handle video click (click anywhere on video to play/pause)
 function handleVideoClick(e) {
     e.stopPropagation();
-    
+
     // 🔥 Block User interaction in Live Mode
     if (isLiveMode && !isAdmin) {
         showNotification('Chỉ Admin mới có thể điều khiển video trong Live Mode', 'warning');
         return;
     }
-    
+
     // ✅ Mark as human action before toggling
     if (videoSyncController) {
         const state = player.getPlayerState();
@@ -2015,7 +2076,7 @@ function handleVideoClick(e) {
     } else {
         togglePlayPause();
     }
-    
+
     // Show click animation
     if (videoClickOverlay) {
         videoClickOverlay.classList.add('clicked');
@@ -2028,18 +2089,18 @@ function handleVideoClick(e) {
 // 🎮 Show controls temporarily (on mouse move)
 function showControlsTemporarily() {
     if (!customControls) return;
-    
+
     customControls.classList.add('visible');
     if (videoContainer) {
         videoContainer.classList.add('controls-visible');
         videoContainer.classList.remove('controls-hidden');
     }
-    
+
     // Clear existing timeout
     if (controlsTimeout) {
         clearTimeout(controlsTimeout);
     }
-    
+
     // Auto-hide after 3 seconds of inactivity (only in fullscreen)
     controlsTimeout = setTimeout(() => {
         if (!isFullscreen()) return;
@@ -2050,7 +2111,7 @@ function showControlsTemporarily() {
 // 🎮 Hide controls
 function hideControls() {
     if (!customControls) return;
-    
+
     customControls.classList.remove('visible');
     if (videoContainer) {
         videoContainer.classList.add('controls-hidden');
@@ -2062,10 +2123,10 @@ function hideControls() {
 function handleKeyboardShortcuts(e) {
     // Don't trigger if typing in input fields
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-    
+
     if (!player || !isPlayerReady) return;
-    
-    switch(e.key.toLowerCase()) {
+
+    switch (e.key.toLowerCase()) {
         case ' ':
         case 'k':
             e.preventDefault();
@@ -2105,14 +2166,14 @@ function handleKeyboardShortcuts(e) {
 // 🎮 Adjust volume by amount
 function adjustVolume(amount) {
     if (!player || !isPlayerReady) return;
-    
+
     const currentVolume = player.getVolume();
     const newVolume = Math.max(0, Math.min(100, currentVolume + amount));
-    
+
     player.setVolume(newVolume);
     if (volumeSlider) volumeSlider.value = newVolume;
     updateVolumeIcon(newVolume);
-    
+
     if (newVolume > 0) {
         player.unMute();
         lastVolume = newVolume;
@@ -2122,11 +2183,11 @@ function adjustVolume(amount) {
 // 🎮 Set Playback Speed
 function setPlaybackSpeed(speed) {
     if (!player || !isPlayerReady) return;
-    
+
     try {
         player.setPlaybackRate(speed);
         currentSpeed = speed;
-        
+
         // Update button text
         if (speedBtn) {
             const speedText = speedBtn.querySelector('.speed-text');
@@ -2134,7 +2195,7 @@ function setPlaybackSpeed(speed) {
                 speedText.textContent = speed === 1 ? '1x' : speed + 'x';
             }
         }
-        
+
         // Update active state
         if (speedMenu) {
             const options = speedMenu.querySelectorAll('.speed-option');
@@ -2146,7 +2207,7 @@ function setPlaybackSpeed(speed) {
                 }
             });
         }
-        
+
         // Emit to other users if admin
         if (isAdmin && socket) {
             socket.emit('playback-speed-change', {
@@ -2154,7 +2215,7 @@ function setPlaybackSpeed(speed) {
                 roomId: currentRoom
             });
         }
-        
+
     } catch (error) {
         console.error(`[${getFormattedTime()}] Failed to set playback speed:`, error);
     }
@@ -2163,13 +2224,13 @@ function setPlaybackSpeed(speed) {
 // 🎮 Toggle Quality Menu
 function toggleQualityMenu() {
     if (!qualityMenu) return;
-    
+
     const isVisible = qualityMenu.classList.contains('visible');
-    
+
     // Close speed and caption menus if open
     if (speedMenu) speedMenu.classList.remove('visible');
     if (captionMenu) captionMenu.classList.remove('visible');
-    
+
     if (isVisible) {
         qualityMenu.classList.remove('visible');
     } else {
@@ -2180,20 +2241,20 @@ function toggleQualityMenu() {
 // 🎮 Load Available Quality Levels
 function loadAvailableQualities() {
     if (!player || !isPlayerReady || !qualityMenu) return;
-    
+
     // Only show loading if menu is currently empty or has loading state
     const currentContent = qualityMenu.innerHTML;
     if (!currentContent || currentContent.includes('quality-loading')) {
         showQualityLoading();
     }
-    
+
     try {
         // Get available quality levels from YouTube API
         const qualityLevels = player.getAvailableQualityLevels();
-        
+
         // Filter out empty strings and 'auto'/'default' from the list
         const validQualities = qualityLevels.filter(q => q && q !== 'auto' && q !== 'default');
-        
+
         if (validQualities && validQualities.length > 0) {
             // Found actual quality levels (not just auto)
             availableQualities = validQualities;
@@ -2215,7 +2276,7 @@ function loadAvailableQualities() {
 // Show loading state in quality menu
 function showQualityLoading() {
     if (!qualityMenu) return;
-    
+
     qualityMenu.innerHTML = '';
     const loadingOption = document.createElement('div');
     loadingOption.className = 'quality-option quality-loading';
@@ -2227,9 +2288,9 @@ function showQualityLoading() {
 // Build quality menu with all available levels
 function buildQualityMenu(qualityLevels) {
     if (!qualityMenu) return;
-    
+
     qualityMenu.innerHTML = '';
-    
+
     // Quality name mapping
     const qualityNames = {
         'highres': '4K/8K',
@@ -2244,7 +2305,7 @@ function buildQualityMenu(qualityLevels) {
         'auto': 'Auto',
         'default': 'Auto'
     };
-    
+
     // Add "Auto" option first (default active)
     const autoOption = document.createElement('div');
     autoOption.className = 'quality-option active';
@@ -2255,36 +2316,36 @@ function buildQualityMenu(qualityLevels) {
         toggleQualityMenu();
     });
     qualityMenu.appendChild(autoOption);
-    
+
     // Add separator
     const separator = document.createElement('div');
     separator.className = 'quality-separator';
     separator.style.cssText = 'height: 1px; background: rgba(255,255,255,0.1); margin: 4px 0;';
     qualityMenu.appendChild(separator);
-    
+
     // Add available quality levels
     qualityLevels.forEach((quality) => {
         // Skip 'auto' or 'default' as we already added it
         if (quality === 'auto' || quality === 'default') return;
-        
+
         const option = document.createElement('div');
         option.className = 'quality-option';
         option.dataset.quality = quality;
-        
+
         const displayName = qualityNames[quality] || quality.toUpperCase();
-        
+
         // Add HD icon for HD qualities
         if (quality.startsWith('hd') || quality === 'highres') {
             option.innerHTML = `<i class="fas fa-film"></i> ${displayName}`;
         } else {
             option.innerHTML = `<i class="fas fa-video"></i> ${displayName}`;
         }
-        
+
         option.addEventListener('click', () => {
             setVideoQuality(quality);
             toggleQualityMenu();
         });
-        
+
         qualityMenu.appendChild(option);
     });
 }
@@ -2292,9 +2353,9 @@ function buildQualityMenu(qualityLevels) {
 // Build auto-only quality menu (fallback)
 function buildAutoQualityMenu() {
     if (!qualityMenu) return;
-    
+
     qualityMenu.innerHTML = '';
-    
+
     const autoOption = document.createElement('div');
     autoOption.className = 'quality-option active';
     autoOption.dataset.quality = 'auto';
@@ -2311,16 +2372,16 @@ function buildAutoQualityMenu() {
 // Quality is now automatically managed by YouTube
 function setVideoQuality(quality) {
     if (!player || !isPlayerReady) return;
-    
+
     // Display notification that quality is auto-managed
     displaySystemMessage('⚠️ Chất lượng video tự động bởi YouTube (không thể điều chỉnh thủ công)');
-    
+
     // Always use auto quality
     currentQuality = 'auto';
-    
+
     // Update UI to show auto
     updateQualityButtonDisplay('auto');
-    
+
     // Note: No longer calling deprecated methods:
     // - player.setPlaybackQuality() - DEPRECATED
     // - player.getAvailableQualityLevels() - DEPRECATED
@@ -2367,12 +2428,12 @@ function getQualityButtonDisplay(quality) {
 // Update quality button display text
 function updateQualityButtonDisplay(quality) {
     if (!qualityBtn) return;
-    
+
     const qualityIcon = qualityBtn.querySelector('.quality-icon');
     if (!qualityIcon) return;
-    
+
     qualityIcon.textContent = getQualityButtonDisplay(quality);
-    
+
     // Update tooltip to indicate auto-quality
     qualityBtn.title = 'Chất lượng tự động (không thể thay đổi)';
 }
@@ -2380,13 +2441,13 @@ function updateQualityButtonDisplay(quality) {
 // 🎮 Toggle Caption Menu
 function toggleCaptionMenu() {
     if (!captionMenu) return;
-    
+
     const isVisible = captionMenu.classList.contains('visible');
-    
+
     // Close other menus
     if (speedMenu) speedMenu.classList.remove('visible');
     if (qualityMenu) qualityMenu.classList.remove('visible');
-    
+
     if (isVisible) {
         captionMenu.classList.remove('visible');
     } else {
@@ -2401,13 +2462,13 @@ function toggleCaptionMenu() {
 // 🎮 Toggle Speed Menu
 function toggleSpeedMenu() {
     if (!speedMenu) return;
-    
+
     const isVisible = speedMenu.classList.contains('visible');
-    
+
     // Close other menus
     if (qualityMenu) qualityMenu.classList.remove('visible');
     if (captionMenu) captionMenu.classList.remove('visible');
-    
+
     if (isVisible) {
         speedMenu.classList.remove('visible');
     } else {
@@ -2418,7 +2479,7 @@ function toggleSpeedMenu() {
 // 🎮 Load Available Captions
 function loadAvailableCaptions() {
     if (!player || !isPlayerReady || !captionMenu) return;
-    
+
     // Ensure captions module is requested in the player
     try {
         if (typeof player.loadModule === 'function') {
@@ -2428,7 +2489,7 @@ function loadAvailableCaptions() {
     } catch (e) {
         // Module might already be loaded or not supported
     }
-    
+
     // Try to get tracklist from YouTube player
     let trackInfo = null;
     try {
@@ -2438,7 +2499,7 @@ function loadAvailableCaptions() {
     } catch (err) {
         // Track list not ready yet
     }
-    
+
     if (trackInfo && Array.isArray(trackInfo) && trackInfo.length > 0) {
         availableCaptions = trackInfo;
         buildCaptionMenu(trackInfo);
@@ -2453,7 +2514,7 @@ function loadAvailableCaptions() {
 // Show loading state in caption menu
 function showCaptionLoading() {
     if (!captionMenu) return;
-    
+
     captionMenu.innerHTML = '';
     const loadingOption = document.createElement('div');
     loadingOption.className = 'caption-option caption-loading';
@@ -2465,17 +2526,17 @@ function showCaptionLoading() {
 // Build full caption menu with all tracks
 function buildCaptionMenu(trackInfo) {
     if (!captionMenu) return;
-    
+
     // Restore caption button normal state
     if (captionBtn) {
         captionBtn.classList.remove('disabled');
         captionBtn.title = 'Phụ đề / Phụ đề chi tiết (Phím C)';
     }
-    
+
     captionMenu.innerHTML = '';
-    
+
     let activeTrackFound = false;
-    
+
     // Add "Off" option
     const offOption = document.createElement('div');
     offOption.className = 'caption-option';
@@ -2486,13 +2547,13 @@ function buildCaptionMenu(trackInfo) {
         toggleCaptionMenu();
     });
     captionMenu.appendChild(offOption);
-    
+
     // Add separator
     const separator = document.createElement('div');
     separator.className = 'caption-separator';
     separator.style.cssText = 'height: 1px; background: rgba(255,255,255,0.1); margin: 4px 0;';
     captionMenu.appendChild(separator);
-    
+
     // Add available caption tracks
     trackInfo.forEach((track, index) => {
         const option = document.createElement('div');
@@ -2500,10 +2561,10 @@ function buildCaptionMenu(trackInfo) {
         option.dataset.track = index.toString();
         option.dataset.langCode = track.languageCode || '';
         option.dataset.langName = track.languageName || '';
-        
+
         // Display format: "English" or "Tiếng Việt (tự động)"
         let displayText = track.displayName || track.name || track.languageName || track.languageCode || `Phụ đề ${index + 1}`;
-        
+
         // Check if this track matches the saved language preference or current active track
         if (currentCaptionLangCode && track.languageCode === currentCaptionLangCode && !activeTrackFound) {
             option.classList.add('active');
@@ -2516,7 +2577,7 @@ function buildCaptionMenu(trackInfo) {
             option.classList.add('active');
             activeTrackFound = true;
         }
-        
+
         // Add icon for auto-generated vs manual captions
         const isAuto = track.kind === 'asr' || displayText.toLowerCase().includes('tự động') || displayText.toLowerCase().includes('auto');
         if (isAuto) {
@@ -2524,15 +2585,15 @@ function buildCaptionMenu(trackInfo) {
         } else {
             option.innerHTML = `<i class="fas fa-closed-captioning"></i> <span>${displayText}</span>`;
         }
-        
+
         option.addEventListener('click', () => {
             setCaptions(index);
             toggleCaptionMenu();
         });
-        
+
         captionMenu.appendChild(option);
     });
-    
+
     // If no active track, mark "Off" as active
     if (!activeTrackFound) {
         offOption.classList.add('active');
@@ -2545,15 +2606,15 @@ function buildCaptionMenu(trackInfo) {
 // Build "no captions available" menu
 function buildNoCaptionsMenu() {
     if (!captionMenu) return;
-    
+
     captionMenu.innerHTML = '';
-    
+
     const noCaption = document.createElement('div');
     noCaption.className = 'caption-option caption-unavailable';
     noCaption.style.cssText = 'opacity: 0.75; cursor: default;';
     noCaption.innerHTML = '<i class="fas fa-info-circle"></i> Video không có phụ đề';
     captionMenu.appendChild(noCaption);
-    
+
     if (captionBtn) {
         captionBtn.classList.remove('active');
         captionBtn.classList.add('disabled');
@@ -2564,7 +2625,7 @@ function buildNoCaptionsMenu() {
 // 🎮 Set Captions
 function setCaptions(trackIndex, shouldEmit = true) {
     if (!player || !isPlayerReady) return;
-    
+
     try {
         if (trackIndex === 'off' || trackIndex === null) {
             // Turn off captions safely via player options without unloading module
@@ -2578,38 +2639,38 @@ function setCaptions(trackIndex, shouldEmit = true) {
             }
             currentCaptionTrack = 'off';
             currentCaptionLangCode = null;
-            
+
             if (captionBtn) {
                 captionBtn.classList.remove('active');
             }
-            
+
         } else {
             // Turn on specific caption track by index
             const index = parseInt(trackIndex);
-            
+
             if (!isNaN(index) && availableCaptions[index]) {
                 const track = availableCaptions[index];
-                
+
                 try {
                     if (typeof player.loadModule === 'function') {
                         player.loadModule('captions');
                         player.loadModule('cc');
                     }
-                    
+
                     const trackOptions = {
                         'languageCode': track.languageCode
                     };
                     if (track.name) trackOptions.name = track.name;
                     if (track.languageName) trackOptions.languageName = track.languageName;
-                    
+
                     if (typeof player.setOption === 'function') {
                         player.setOption('captions', 'track', trackOptions);
                         player.setOption('cc', 'track', trackOptions);
                     }
-                    
+
                     currentCaptionTrack = index;
                     currentCaptionLangCode = track.languageCode; // Save language code for next video
-                    
+
                     if (captionBtn) {
                         captionBtn.classList.add('active');
                     }
@@ -2622,7 +2683,7 @@ function setCaptions(trackIndex, shouldEmit = true) {
                 return;
             }
         }
-        
+
         // Update active state in menu
         if (captionMenu) {
             const options = captionMenu.querySelectorAll('.caption-option');
@@ -2634,7 +2695,7 @@ function setCaptions(trackIndex, shouldEmit = true) {
                 }
             });
         }
-        
+
         // Emit to other users if admin
         if (shouldEmit && isAdmin && socket) {
             socket.emit('caption-change', {
@@ -2643,7 +2704,7 @@ function setCaptions(trackIndex, shouldEmit = true) {
                 roomId: currentRoom
             });
         }
-        
+
         // Show system message
         if (shouldEmit) {
             let captionText;
@@ -2652,17 +2713,17 @@ function setCaptions(trackIndex, shouldEmit = true) {
             } else {
                 const index = parseInt(trackIndex);
                 if (!isNaN(index) && availableCaptions[index]) {
-                    captionText = availableCaptions[index].displayName || 
-                                  availableCaptions[index].languageName || 
-                                  availableCaptions[index].languageCode || 
-                                  'Bật';
+                    captionText = availableCaptions[index].displayName ||
+                        availableCaptions[index].languageName ||
+                        availableCaptions[index].languageCode ||
+                        'Bật';
                 } else {
                     captionText = 'Bật';
                 }
             }
             displaySystemMessage(`Phụ đề: ${captionText}`);
         }
-        
+
     } catch (error) {
         console.warn('Error in setCaptions:', error);
         displaySystemMessage('⚠️ Không thể thay đổi phụ đề cho video này');
@@ -2693,6 +2754,311 @@ function closeAllMenus() {
     if (speedMenu) speedMenu.classList.remove('visible');
     if (qualityMenu) qualityMenu.classList.remove('visible');
     if (captionMenu) captionMenu.classList.remove('visible');
+    if (audioTrackMenu) audioTrackMenu.classList.remove('visible');
+}
+
+// 🎮 Toggle Audio Track Menu
+function toggleAudioTrackMenu() {
+    if (!audioTrackMenu) return;
+
+    const isVisible = audioTrackMenu.classList.contains('visible');
+
+    // Close other menus
+    if (speedMenu) speedMenu.classList.remove('visible');
+    if (qualityMenu) qualityMenu.classList.remove('visible');
+    if (captionMenu) captionMenu.classList.remove('visible');
+
+    if (isVisible) {
+        audioTrackMenu.classList.remove('visible');
+    } else {
+        if (availableAudioTracks.length === 0 && currentPlayingVideoId) {
+            loadAvailableAudioTracks(currentPlayingVideoId);
+        }
+        audioTrackMenu.classList.add('visible');
+    }
+}
+
+// 🎮 Hiển thị trạng thái đang tải trong audio track menu
+function showAudioTrackLoading() {
+    if (!audioTrackMenu) return;
+    audioTrackMenu.innerHTML = '';
+    const loadingOption = document.createElement('div');
+    loadingOption.className = 'audio-track-option audio-track-loading';
+    loadingOption.style.cssText = 'opacity: 0.7; cursor: wait; pointer-events: none;';
+    loadingOption.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Đang phân tích audio tracks...';
+    audioTrackMenu.appendChild(loadingOption);
+}
+
+// 🎮 Xây dựng menu khi không có audio track khả dụng
+function buildNoAudioTracksMenu() {
+    if (!audioTrackMenu) return;
+    audioTrackMenu.innerHTML = '';
+    const noTrack = document.createElement('div');
+    noTrack.className = 'audio-track-option audio-track-unavailable';
+    noTrack.style.cssText = 'opacity: 0.75; cursor: default;';
+    noTrack.innerHTML = '<i class="fas fa-info-circle"></i> Chỉ có audio mặc định';
+    audioTrackMenu.appendChild(noTrack);
+
+    if (audioTrackBtn) {
+        audioTrackBtn.title = 'Audio Track: Chỉ có âm thanh mặc định';
+    }
+}
+
+// 🎮 Cập nhật UI active trong audio track menu
+function updateAudioTrackMenuUI(activeTrackId) {
+    if (!audioTrackMenu) return;
+    const options = audioTrackMenu.querySelectorAll('.audio-track-option');
+    options.forEach(opt => {
+        if (opt.dataset.track === activeTrackId) {
+            opt.classList.add('active');
+        } else {
+            opt.classList.remove('active');
+        }
+    });
+
+    if (audioTrackBtn) {
+        if (activeTrackId && activeTrackId !== 'default') {
+            audioTrackBtn.classList.add('active');
+        } else {
+            audioTrackBtn.classList.remove('active');
+        }
+    }
+}
+
+// 🎮 Xây dựng menu đầy đủ với danh sách audio tracks
+function buildAudioTrackMenu(tracks) {
+    if (!audioTrackMenu) return;
+
+    if (audioTrackBtn) {
+        audioTrackBtn.classList.remove('disabled');
+        audioTrackBtn.title = 'Audio Track / Âm thanh';
+    }
+
+    audioTrackMenu.innerHTML = '';
+
+    // Lựa chọn "Mặc định (Original)"
+    const defaultOption = document.createElement('div');
+    defaultOption.className = `audio-track-option ${currentAudioTrack === 'default' ? 'active' : ''}`;
+    defaultOption.dataset.track = 'default';
+    defaultOption.innerHTML = '<i class="fas fa-volume-up"></i> Mặc định (Original)';
+    defaultOption.addEventListener('click', () => {
+        setAudioTrack('default', true);
+        toggleAudioTrackMenu();
+    });
+    audioTrackMenu.appendChild(defaultOption);
+
+    // Đường kẻ phân cách
+    const separator = document.createElement('div');
+    separator.className = 'audio-separator';
+    separator.style.cssText = 'height: 1px; background: rgba(255,255,255,0.1); margin: 4px 0;';
+    audioTrackMenu.appendChild(separator);
+
+    // Thêm các track âm thanh khả dụng
+    tracks.forEach((track) => {
+        const option = document.createElement('div');
+        option.className = `audio-track-option ${currentAudioTrack === track.id ? 'active' : ''}`;
+        option.dataset.track = track.id;
+
+        const iconClass = track.codec === 'opus' ? 'fa-headphones' : 'fa-music';
+        option.innerHTML = `<i class="fas ${iconClass}"></i> <span>${track.displayName}</span>`;
+
+        option.addEventListener('click', () => {
+            setAudioTrack(track.id, true);
+            toggleAudioTrackMenu();
+        });
+
+        audioTrackMenu.appendChild(option);
+    });
+}
+
+// 🎮 Lấy danh sách audio tracks từ backend API
+async function loadAvailableAudioTracks(videoId) {
+    if (!videoId || !audioTrackMenu) return;
+
+    showAudioTrackLoading();
+
+    try {
+        const response = await fetch(`/api/youtube/audio-tracks?videoId=${encodeURIComponent(videoId)}`);
+        const data = await response.json();
+
+        if (data.success && Array.isArray(data.tracks) && data.tracks.length > 0) {
+            availableAudioTracks = data.tracks;
+            buildAudioTrackMenu(data.tracks);
+        } else {
+            availableAudioTracks = [];
+            buildNoAudioTracksMenu();
+        }
+    } catch (err) {
+        console.warn('Lỗi khi tải audio tracks:', err);
+        availableAudioTracks = [];
+        buildNoAudioTracksMenu();
+    }
+}
+
+// 🎮 Đổi audio track với fallback an toàn
+async function setAudioTrack(trackIdOrItag, notify = true) {
+    if (trackIdOrItag === 'default' || !trackIdOrItag) {
+        currentAudioTrack = 'default';
+        if (customAudioPlayer) {
+            customAudioPlayer.onerror = null;
+            customAudioPlayer.oncanplay = null;
+            customAudioPlayer.pause();
+            customAudioPlayer.removeAttribute('src');
+            customAudioPlayer.load();
+        }
+        if (player && isPlayerReady) {
+            try {
+                if (!isUserAudioMuted) {
+                    player.unMute();
+                    player.setVolume(lastVolume || 100);
+                }
+            } catch (e) { }
+        }
+        updateAudioTrackMenuUI('default');
+
+        if (notify && currentRoom) {
+            socket.emit('audio-track-change', {
+                roomId: currentRoom,
+                trackId: 'default',
+                displayName: 'Mặc định'
+            });
+        }
+        return;
+    }
+
+    const selected = availableAudioTracks.find(t => t.id === trackIdOrItag)
+        || availableAudioTracks.find(t => String(t.itag) === String(trackIdOrItag));
+
+    if (!selected) {
+        displaySystemMessage('⚠️ Không tìm thấy audio track yêu cầu, tự động dùng âm thanh mặc định');
+        setAudioTrack('default', false);
+        return;
+    }
+
+    currentAudioTrack = selected.id;
+    updateAudioTrackMenuUI(selected.id);
+
+    if (customAudioPlayer) {
+        // Mute YouTube player để phát audio track riêng biệt
+        if (player && isPlayerReady) {
+            try {
+                player.mute();
+            } catch (e) { }
+        }
+
+        const langParam = selected.language ? `&language=${encodeURIComponent(selected.language)}` : '';
+        const streamUrl = `/api/youtube/audio-stream?videoId=${encodeURIComponent(currentPlayingVideoId || '')}&trackId=${encodeURIComponent(selected.id)}&itag=${selected.itag}${langParam}`;
+
+        displaySystemMessage(`🔄 Đang chuẩn bị audio track: ${selected.displayName}...`);
+
+        customAudioPlayer.onerror = () => {
+            if (currentAudioTrack === selected.id) {
+                displaySystemMessage(`⚠️ Lỗi tải stream audio "${selected.displayName}", tự động fallback về mặc định`);
+                setAudioTrack('default', false);
+            }
+        };
+
+        // Kích hoạt duy nhất 1 lần khi audio track sẵn sàng phát
+        customAudioPlayer.oncanplay = () => {
+            customAudioPlayer.oncanplay = null; // Huỷ ngay để tránh bắn lặp khi buffer hoặc tua
+
+            if (currentAudioTrack === selected.id) {
+                displaySystemMessage(`🔊 Đã chuyển sang audio: ${selected.displayName}`);
+                const currentVol = volumeSlider ? parseInt(volumeSlider.value, 10) : (lastVolume || 100);
+                customAudioPlayer.volume = Math.max(0, Math.min(1, (isNaN(currentVol) ? 100 : currentVol) / 100));
+                customAudioPlayer.muted = isUserAudioMuted || currentVol === 0;
+
+                if (player && isPlayerReady) {
+                    try {
+                        const targetTime = player.getCurrentTime() || 0;
+                        customAudioPlayer.currentTime = targetTime;
+                        customAudioPlayer.playbackRate = player.getPlaybackRate() || 1;
+                        if (player.getPlayerState() === YT.PlayerState.PLAYING) {
+                            customAudioPlayer.play().catch(() => { });
+                        }
+                    } catch (e) { }
+                }
+            }
+        };
+
+        customAudioPlayer.src = streamUrl;
+        customAudioPlayer.load();
+    }
+
+    if (notify && currentRoom) {
+        socket.emit('audio-track-change', {
+            roomId: currentRoom,
+            trackId: selected.id,
+            itag: selected.itag,
+            language: selected.language,
+            displayName: selected.displayName,
+            codec: selected.codec,
+            bitrateKbps: selected.bitrateKbps
+        });
+    }
+}
+
+// 🎮 Đồng bộ hóa custom audio player với YouTube player
+function syncCustomAudioWithPlayer() {
+    if (!customAudioPlayer || currentAudioTrack === 'default' || !customAudioPlayer.src) return;
+    if (!player || !isPlayerReady) return;
+
+    try {
+        const playerState = player.getPlayerState();
+
+        // Đảm bảo YouTube video gốc luôn mute khi đang phát audio track riêng biệt
+        if (!player.isMuted()) {
+            try { player.mute(); } catch (e) { }
+        }
+
+        // Đồng bộ play / pause
+        if (playerState === YT.PlayerState.PLAYING) {
+            if (customAudioPlayer.paused) {
+                customAudioPlayer.play().catch(() => { });
+            }
+        } else if (playerState === YT.PlayerState.PAUSED || playerState === YT.PlayerState.BUFFERING) {
+            if (!customAudioPlayer.paused) {
+                customAudioPlayer.pause();
+            }
+        }
+
+        // Đồng bộ volume & mute từ UI điều khiển
+        const currentVol = volumeSlider ? parseInt(volumeSlider.value, 10) : (lastVolume || 100);
+        customAudioPlayer.volume = Math.max(0, Math.min(1, (isNaN(currentVol) ? 100 : currentVol) / 100));
+        customAudioPlayer.muted = isUserAudioMuted || currentVol === 0;
+
+        // Tránh can thiệp khi người dùng đang kéo thanh tiến trình (seek) hoặc video không phát
+        if (isSeeking || playerState !== YT.PlayerState.PLAYING) return;
+
+        // Giảm tần suất kiểm tra lệch thời gian (500ms một lần thay vì mỗi 100ms)
+        const now = Date.now();
+        if (now - lastAudioDriftCheck < 500) return;
+        lastAudioDriftCheck = now;
+
+        const playerTime = player.getCurrentTime() || 0;
+        const audioTime = customAudioPlayer.currentTime || 0;
+        const diff = playerTime - audioTime; // > 0: audio đi chậm hơn video; < 0: audio đi nhanh hơn video
+        const baseRate = player.getPlaybackRate() || 1;
+
+        // Nếu lệch lớn (> 1.5s, ví dụ sau khi nhảy cóc tua thời gian), seek trực tiếp
+        if (Math.abs(diff) > 1.5) {
+            customAudioPlayer.currentTime = playerTime;
+            customAudioPlayer.playbackRate = baseRate;
+        } else if (diff > 0.12) {
+            // Lệch nhỏ: audio chậm hơn video -> tăng nhẹ tốc độ 4% để bắt kịp mượt mà, không giật rè âm thanh
+            customAudioPlayer.playbackRate = baseRate * 1.04;
+        } else if (diff < -0.12) {
+            // Lệch nhỏ: audio nhanh hơn video -> giảm nhẹ tốc độ 4% để video bắt kịp
+            customAudioPlayer.playbackRate = baseRate * 0.96;
+        } else if (Math.abs(diff) <= 0.06) {
+            // Đã đồng bộ chuẩn trong phạm vi 60ms -> phục hồi tốc độ chuẩn
+            if (customAudioPlayer.playbackRate !== baseRate) {
+                customAudioPlayer.playbackRate = baseRate;
+            }
+        }
+    } catch (e) {
+        // Bỏ qua lỗi truy vấn player
+    }
 }
 
 // 🎮 Update Live Mode UI
@@ -2707,27 +3073,42 @@ function updateLiveModeUI() {
 // Load YouTube video
 function loadYouTubeVideo(videoId) {
     if (!videoId) return;
-    
+
+    currentPlayingVideoId = videoId;
     videoPlaceholder.style.display = 'none';
-    
+
     // Reset states for new video (but keep currentCaptionTrack to remember user preference)
     availableCaptions = [];
     // Don't reset currentCaptionTrack - we want to keep the user's caption preference
     availableQualities = [];
     currentQuality = 'auto';
-    
+
+    // Reset Audio Track states
+    currentAudioTrack = 'default';
+    availableAudioTracks = [];
+    if (customAudioPlayer) {
+        customAudioPlayer.pause();
+        customAudioPlayer.src = '';
+    }
+    if (audioTrackBtn) {
+        audioTrackBtn.classList.remove('active', 'disabled');
+        audioTrackBtn.title = 'Audio Track / Âm thanh';
+    }
+    showAudioTrackLoading();
+    loadAvailableAudioTracks(videoId);
+
     // Reset video title while loading
     if (videoTitle) {
         videoTitle.textContent = 'Đang tải...';
     }
-    
+
     // Xác định player controls dựa trên live mode và admin status
     const playerControls = getPlayerControls();
-    
+
     if (player) {
         player.loadVideoById(videoId);
         updatePlayerControls();
-        
+
         // Reset caption states for new video
         availableCaptions = [];
         currentCaptionTrack = null;
@@ -2736,23 +3117,23 @@ function loadYouTubeVideo(videoId) {
             captionBtn.title = 'Phụ đề / Phụ đề chi tiết (Phím C)';
         }
         showCaptionLoading();
-        
+
         // Update video title for new video
         setTimeout(() => {
             updateVideoTitle();
         }, 1000);
-        
+
         // Reload captions for new video
         setTimeout(() => {
             loadAvailableCaptions();
         }, 1200);
-        
+
         setTimeout(() => {
             if (availableCaptions.length === 0) {
                 loadAvailableCaptions();
             }
         }, 3000);
-        
+
         setTimeout(() => {
             if (availableCaptions.length === 0) {
                 loadAvailableCaptions();
@@ -2795,7 +3176,7 @@ function getPlayerControls() {
 // Cập nhật player controls khi thay đổi live mode
 function updatePlayerControls() {
     if (!player) return;
-    
+
     const iframe = document.querySelector('#youtube-player iframe');
     if (iframe) {
         // Thêm overlay để disable clicks cho user trong live mode
@@ -2807,7 +3188,7 @@ function updatePlayerControls() {
 function updatePlayerOverlay() {
     const videoContainer = document.querySelector('.video-container');
     let overlay = videoContainer.querySelector('.player-overlay');
-    
+
     if (isLiveMode && !isAdmin) {
         // Tạo invisible overlay để disable interaction nhưng không che video
         if (!overlay) {
@@ -2833,7 +3214,7 @@ function updatePlayerOverlay() {
 // Player ready callback
 function onPlayerReady(event) {
     isPlayerReady = true;
-    
+
     // ✅ Initialize sync system
     videoStateManager = new VideoSyncStateManager();
     videoSyncController = new ClientVideoSyncController(
@@ -2842,77 +3223,77 @@ function onPlayerReady(event) {
         currentRoom,
         videoStateManager
     );
-    
+
     // 🎮 Add event listener for auto-quality changes (monitoring only)
     // This allows us to display current quality when YouTube changes it automatically
-    player.addEventListener('onPlaybackQualityChange', function(event) {
+    player.addEventListener('onPlaybackQualityChange', function (event) {
         const newQuality = event.data; // e.g., 'hd1080', 'medium'
         currentQuality = newQuality; // Update local state
         updateQualityButtonDisplay(newQuality); // Display on UI (read-only)
         displaySystemMessage(`📊 Chất lượng tự động: ${getQualityDisplayName(newQuality)}`);
     });
-    
+
     // Hide placeholder and loading
     if (videoPlaceholder) videoPlaceholder.style.display = 'none';
     if (loading) loading.style.display = 'none';
-    
+
     // 🎮 Show custom controls and click overlay
     if (customControls) {
         customControls.classList.remove('hidden');
         customControls.classList.add('visible');
     }
-    
+
     if (videoClickOverlay) {
         videoClickOverlay.classList.remove('hidden');
     }
-    
+
     // 🎮 Initialize custom controls (only once)
     if (!window.customControlsInitialized) {
         initializeCustomControls();
         window.customControlsInitialized = true;
     }
-    
+
     // 🎮 Set video title
     updateVideoTitle();
-    
+
     // 🎮 Load available quality levels - DEPRECATED API
     // Quality control methods are deprecated by YouTube IFrame API
     // setTimeout(() => {
     //     loadAvailableQualities();
     // }, 2000);
-    
+
     // // 🎮 Retry loading quality levels if still only auto
     // setTimeout(() => {
     //     if (availableQualities.length === 0) {
     //         loadAvailableQualities();
     //     }
     // }, 4000);
-    
+
     // // 🎮 Final retry for quality levels
     // setTimeout(() => {
     //     if (availableQualities.length === 0) {
     //         loadAvailableQualities();
     //     }
     // }, 6000);
-    
+
     // Ensure onApiChange is listened to
     try {
         player.addEventListener('onApiChange', onPlayerApiChange);
-    } catch (e) {}
+    } catch (e) { }
 
     // 🎮 Load available captions/subtitles
     // YouTube needs time to load caption tracks
     setTimeout(() => {
         loadAvailableCaptions();
     }, 1200);
-    
+
     // 🎮 Retry loading captions for videos that load captions late
     setTimeout(() => {
         if (availableCaptions.length === 0) {
             loadAvailableCaptions();
         }
     }, 3000);
-    
+
     // 🎮 Final retry for captions
     setTimeout(() => {
         if (availableCaptions.length === 0) {
@@ -2924,7 +3305,7 @@ function onPlayerReady(event) {
 // 🎮 Update Video Title
 function updateVideoTitle() {
     if (!videoTitle || !player || !isPlayerReady) return;
-    
+
     try {
         const videoData = player.getVideoData();
         if (videoData && videoData.title) {
@@ -2940,11 +3321,30 @@ function updateVideoTitle() {
 // Player state change callback
 function onPlayerStateChange(event) {
     if (!isPlayerReady) return;
-    
+
+    // 🎵 Đồng bộ phát audio track riêng biệt khi YouTube player thay đổi trạng thái
+    if (customAudioPlayer && currentAudioTrack !== 'default' && customAudioPlayer.src) {
+        try {
+            if (event.data === YT.PlayerState.PLAYING) {
+                const pTime = player.getCurrentTime() || 0;
+                if (Math.abs((customAudioPlayer.currentTime || 0) - pTime) > 0.5) {
+                    customAudioPlayer.currentTime = pTime;
+                }
+                customAudioPlayer.playbackRate = player.getPlaybackRate() || 1;
+                customAudioPlayer.play().catch(() => { });
+            } else if (event.data === YT.PlayerState.PAUSED || event.data === YT.PlayerState.BUFFERING) {
+                customAudioPlayer.pause();
+            } else if (event.data === YT.PlayerState.ENDED) {
+                customAudioPlayer.pause();
+                customAudioPlayer.currentTime = 0;
+            }
+        } catch (e) { }
+    }
+
     // ✅ Use new sync controller if available
     if (videoSyncController) {
         videoSyncController.onPlayerStateChange(event);
-        
+
         // Keep UI updates
         if (event.data === YT.PlayerState.PLAYING) {
             if (videoTitle && videoTitle.textContent === 'Đang tải...') {
@@ -2959,12 +3359,12 @@ function onPlayerStateChange(event) {
         }
         return;
     }
-    
+
     // 🔥 FALLBACK: Old behavior for backward compatibility
     if (isReceivingSync || isSyncing) {
         return;
     }
-    
+
     // 🎮 Update video title and load quality/captions when video starts playing
     if (event.data === YT.PlayerState.PLAYING) {
         if (videoTitle && videoTitle.textContent === 'Đang tải...') {
@@ -2977,7 +3377,7 @@ function onPlayerStateChange(event) {
             setTimeout(() => loadAvailableCaptions(), 1000);
         }
     }
-    
+
     // 🔥 MODE 1: Live Mode ON - Only Admin can send commands
     if (isLiveMode) {
         if (!isAdmin) {
@@ -2986,12 +3386,12 @@ function onPlayerStateChange(event) {
         emitVideoStateChange(event.data);
         return;
     }
-    
+
     // 🔥 MODE 2: Live Mode OFF (Party Mode) - Everyone can control, but with debounce
     if (syncDebounceTimeout) {
         clearTimeout(syncDebounceTimeout);
     }
-    
+
     syncDebounceTimeout = setTimeout(() => {
         if (!isReceivingSync && !isSyncing) {
             emitVideoStateChange(event.data);
@@ -3002,14 +3402,14 @@ function onPlayerStateChange(event) {
 // 🔥 Helper function to emit video state change
 function emitVideoStateChange(playerState) {
     if (!player || !isPlayerReady) return;
-    
+
     const state = {
         isPlaying: playerState === YT.PlayerState.PLAYING,
         currentTime: player.getCurrentTime(),
         playerState: playerState,
         timestamp: Date.now() // Add timestamp for tracking
     };
-    
+
     // Emit legacy format
     socket.emit('video-state-change', {
         state: state,
@@ -3026,7 +3426,7 @@ function emitVideoStateChange(playerState) {
     };
     const compactState = stateMap[playerState] !== undefined ? stateMap[playerState] : 0;
     const currentTime = Math.floor(player.getCurrentTime() * 10) / 10;
-    
+
     socket.emit('vs', [compactState, currentTime, Date.now()]);
 }
 
@@ -3034,54 +3434,54 @@ function emitVideoStateChange(playerState) {
 // Format: [state, time, timestamp] where state: 0=paused, 1=playing, 2=buffering, 3=ended
 function syncVideoStateCompact(state, time, timestamp) {
     if (!player || !isPlayerReady) return;
-    
+
     // 🔥 ANTI-FEEDBACK LOOP: Check if this sync is too recent (ignore duplicates)
     const now = Date.now();
     if (timestamp && Math.abs(now - timestamp) > 5000) {
         // Ignore syncs older than 5 seconds (stale data)
         return;
     }
-    
+
     // 🔥 ANTI-FEEDBACK LOOP: Prevent rapid successive syncs
     if (now - lastSyncTimestamp < 200) {
         return;
     }
     lastSyncTimestamp = now;
-    
+
     // 🔥 Set flags to prevent feedback loop
     isReceivingSync = true;
     isSyncing = true;
-    
+
     try {
         const currentTime = player.getCurrentTime();
         const currentState = player.getPlayerState();
         const timeDiff = Math.abs(currentTime - time);
-        
+
         // 🔥 MODE 1: Live Mode - Users must follow Admin strictly
         if (isLiveMode && !isAdmin) {
             // Sync time if difference > 0.5 second (strict sync in Live Mode)
             if (timeDiff > 0.5) {
                 player.seekTo(time, true);
             }
-            
+
             // Sync play state
             if (state === 1 && currentState !== YT.PlayerState.PLAYING) {
                 player.playVideo();
             } else if (state === 0 && currentState === YT.PlayerState.PLAYING) {
                 player.pauseVideo();
             }
-            
+
             showSyncIndicator();
         }
-        
+
         // 🔥 MODE 2: Party Mode - Gentle sync (only if significantly different)
         else if (!isLiveMode) {
-            
+
             // Sync time only if difference > 2 seconds (more tolerant in Party Mode)
             if (timeDiff > 2) {
                 player.seekTo(time, true);
             }
-            
+
             // Sync play state
             if (state === 1 && currentState !== YT.PlayerState.PLAYING) {
                 player.playVideo();
@@ -3089,7 +3489,7 @@ function syncVideoStateCompact(state, time, timestamp) {
                 player.pauseVideo();
             }
         }
-        
+
     } catch (error) {
         console.error(`[${getFormattedTime()}] ❌ Sync error:`, error);
     } finally {
@@ -3097,7 +3497,7 @@ function syncVideoStateCompact(state, time, timestamp) {
         setTimeout(() => {
             isReceivingSync = false;
         }, 500);
-        
+
         setTimeout(() => {
             isSyncing = false;
         }, 800);
@@ -3107,7 +3507,7 @@ function syncVideoStateCompact(state, time, timestamp) {
 // Sync video state (Legacy format - for backward compatibility)
 function syncVideoState(state) {
     if (!player || !isPlayerReady) return;
-    
+
     // 🔥 ANTI-FEEDBACK LOOP: Check timestamp if available
     const now = Date.now();
     if (state.timestamp) {
@@ -3119,41 +3519,41 @@ function syncVideoState(state) {
         }
         lastSyncTimestamp = now;
     }
-    
+
     // 🔥 Set flags to prevent feedback loop
     isReceivingSync = true;
     isSyncing = true;
-    
+
     try {
         const currentTime = player.getCurrentTime();
         const currentState = player.getPlayerState();
         const timeDiff = Math.abs(currentTime - state.currentTime);
-        
+
         // 🔥 MODE 1: Live Mode - Users must follow Admin strictly
         if (isLiveMode && !isAdmin) {
             // Strict sync in Live Mode
             if (state.forceSync || state.adminControl || timeDiff > 0.5) {
                 player.seekTo(state.currentTime, true);
             }
-            
+
             // Sync play/pause state
             if (state.isPlaying && currentState !== YT.PlayerState.PLAYING) {
                 player.playVideo();
             } else if (!state.isPlaying && currentState === YT.PlayerState.PLAYING) {
                 player.pauseVideo();
             }
-            
+
             showSyncIndicator();
         }
-        
+
         // 🔥 MODE 2: Party Mode - Gentle sync
         else if (!isLiveMode) {
-            
+
             // Gentle sync - only if difference > 2 seconds
             if (timeDiff > 2) {
                 player.seekTo(state.currentTime, true);
             }
-            
+
             // Sync play/pause state
             if (state.isPlaying && currentState !== YT.PlayerState.PLAYING) {
                 player.playVideo();
@@ -3161,7 +3561,7 @@ function syncVideoState(state) {
                 player.pauseVideo();
             }
         }
-        
+
     } catch (error) {
         console.error(`[${getFormattedTime()}] ❌ Sync error (legacy):`, error);
     } finally {
@@ -3169,7 +3569,7 @@ function syncVideoState(state) {
         setTimeout(() => {
             isReceivingSync = false;
         }, 500);
-        
+
         setTimeout(() => {
             isSyncing = false;
         }, 800);
@@ -3180,7 +3580,7 @@ function syncVideoState(state) {
 function showSyncIndicator() {
     const videoContainer = document.querySelector('.video-container');
     let syncIndicator = videoContainer.querySelector('.sync-indicator');
-    
+
     if (!syncIndicator) {
         syncIndicator = document.createElement('div');
         syncIndicator.className = 'sync-indicator';
@@ -3188,10 +3588,10 @@ function showSyncIndicator() {
         syncIndicator.style.opacity = '0';
         videoContainer.appendChild(syncIndicator);
     }
-    
+
     // Show with fade in effect
     syncIndicator.style.opacity = '1';
-    
+
     setTimeout(() => {
         if (syncIndicator) {
             syncIndicator.style.opacity = '0';
@@ -3227,7 +3627,7 @@ function showNotification(message, type = 'info') {
             <i class="fas fa-times"></i>
         </button>
     `;
-    
+
     // Thêm styles nếu chưa có
     if (!document.querySelector('#notification-styles')) {
         const styles = document.createElement('style');
@@ -3267,9 +3667,9 @@ function showNotification(message, type = 'info') {
         `;
         document.head.appendChild(styles);
     }
-    
+
     document.body.appendChild(notification);
-    
+
     // Tự động xóa sau 5 giây
     setTimeout(() => {
         if (notification.parentElement) {
@@ -3280,7 +3680,7 @@ function showNotification(message, type = 'info') {
 }
 
 function getNotificationIcon(type) {
-    switch(type) {
+    switch (type) {
         case 'success': return 'check-circle';
         case 'warning': return 'exclamation-triangle';
         case 'error': return 'exclamation-circle';
@@ -3289,7 +3689,7 @@ function getNotificationIcon(type) {
 }
 
 // Handle page visibility change for better sync
-document.addEventListener('visibilitychange', function() {
+document.addEventListener('visibilitychange', function () {
     if (!document.hidden && player && isPlayerReady) {
         // Request current state when page becomes visible
         setTimeout(() => {
@@ -3309,7 +3709,7 @@ function initializeEmojiPicker() {
             loadEmojiCategory(category.dataset.category);
         });
     });
-    
+
     // Load default category
     loadEmojiCategory('smileys');
 }
@@ -3317,7 +3717,7 @@ function initializeEmojiPicker() {
 function loadEmojiCategory(category) {
     const emojis = emojiData[category] || [];
     emojiGrid.innerHTML = '';
-    
+
     emojis.forEach(emoji => {
         const emojiBtn = document.createElement('button');
         emojiBtn.className = 'emoji-item';
@@ -3352,11 +3752,11 @@ function insertEmoji(emoji) {
     const cursorPos = chatInput.selectionStart;
     const textBefore = chatInput.value.substring(0, cursorPos);
     const textAfter = chatInput.value.substring(cursorPos);
-    
+
     chatInput.value = textBefore + emoji + textAfter;
     chatInput.focus();
     chatInput.setSelectionRange(cursorPos + emoji.length, cursorPos + emoji.length);
-    
+
     hideEmojiPicker();
 }
 
@@ -3364,17 +3764,17 @@ function insertEmoji(emoji) {
 function handleFileSelect(event) {
     const file = event.target.files[0];
     if (!file) return;
-    
+
     // Check file size (max 10MB)
     if (file.size > 10 * 1024 * 1024) {
         alert('File quá lớn! Vui lòng chọn file nhỏ hơn 10MB.');
         return;
     }
-    
+
     const reader = new FileReader();
-    reader.onload = function(e) {
+    reader.onload = function (e) {
         const fileData = e.target.result;
-        
+
         socket.emit('file-share', {
             fileData: fileData,
             fileName: file.name,
@@ -3383,7 +3783,7 @@ function handleFileSelect(event) {
             roomId: currentRoom
         });
     };
-    
+
     reader.readAsDataURL(file);
     fileInput.value = ''; // Reset input
 }
@@ -3392,12 +3792,12 @@ function createFileMessageContent(data) {
     const fileData = data.fileData;
     const fileIcon = getFileIcon(fileData.type);
     const fileSize = formatFileSize(fileData.size);
-    
+
     let preview = '';
     if (fileData.type.startsWith('image/')) {
         preview = `<img src="${fileData.data}" class="file-preview-thumb" alt="${fileData.name}" />`;
     }
-    
+
     return `
         <div class="message-header">
             <span class="username">${data.username}</span>
@@ -3434,7 +3834,7 @@ function formatFileSize(bytes) {
 
 function showFilePreview(fileData, fileName, fileType) {
     const preview = document.getElementById('file-preview');
-    
+
     if (fileType.startsWith('image/')) {
         preview.innerHTML = `
             <img src="${fileData}" alt="${fileName}" />
@@ -3469,7 +3869,7 @@ function showFilePreview(fileData, fileName, fileType) {
             </button>
         `;
     }
-    
+
     showFilePreviewModal();
 }
 
@@ -3495,7 +3895,7 @@ function hideUsersModal() {
 function updateUsersList() {
     const usersListElement = document.getElementById('users-list');
     usersListElement.innerHTML = '';
-    
+
     usersData.forEach(user => {
         const userDiv = document.createElement('div');
         userDiv.className = 'user-item';
@@ -3515,7 +3915,7 @@ function openPrivateMessage(userId, username) {
     currentPrivateTarget = { id: userId, username: username };
     hideUsersModal();
     showPrivateMessageModal();
-    
+
     // Update modal title
     const modalTitle = privateMessageModal.querySelector('h3');
     modalTitle.innerHTML = `<i class="fas fa-envelope"></i> Tin nhắn với ${username}`;
@@ -3533,23 +3933,23 @@ function hidePrivateMessageModal() {
 function sendPrivateMessage() {
     const message = pmInput.value.trim();
     if (!message || !currentPrivateTarget) return;
-    
+
     socket.emit('private-message', {
         message: message,
         targetUserId: currentPrivateTarget.id,
         roomId: currentRoom
     });
-    
+
     pmInput.value = '';
 }
 
 function displayPrivateMessage(data) {
     const messageDiv = document.createElement('div');
     messageDiv.className = 'message private';
-    
+
     const isFromMe = data.fromId === socket.id;
     const displayName = isFromMe ? `Bạn → ${data.to || data.from}` : `${data.from} → Bạn`;
-    
+
     messageDiv.innerHTML = `
         <div class="private-message-indicator">Tin nhắn riêng</div>
         <div class="message-header">
@@ -3558,13 +3958,13 @@ function displayPrivateMessage(data) {
         </div>
         <div class="message-content">${escapeHtml(data.message)}</div>
     `;
-    
+
     // Add to private messages modal if open
     if (!privateMessageModal.classList.contains('hidden')) {
         privateMessages.appendChild(messageDiv.cloneNode(true));
         privateMessages.scrollTop = privateMessages.scrollHeight;
     }
-    
+
     // Also add to main chat
     chatMessages.appendChild(messageDiv);
     chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -3574,21 +3974,21 @@ function displayPrivateMessage(data) {
 function updateAdminUI() {
     const videoContainer = document.querySelector('.video-container');
     const videoSection = document.querySelector('.video-section');
-    
+
     if (isAdmin) {
         adminControls.classList.remove('hidden');
         loadVideoText.textContent = 'Phát ngay';
-        
+
         // Update live mode button
         if (isLiveMode) {
             toggleLiveModeBtn.classList.add('active');
             liveModeText.textContent = 'Tắt Live Mode';
             videoSection.classList.add('live-mode-active');
             videoContainer.classList.add('live-mode');
-            
+
             // Thêm admin control indicator
             addAdminControlIndicator();
-            
+
             // Bắt đầu auto sync cho admin
             startAdminAutoSync();
         } else {
@@ -3596,10 +3996,10 @@ function updateAdminUI() {
             liveModeText.textContent = 'Bật Live Mode';
             videoSection.classList.remove('live-mode-active');
             videoContainer.classList.remove('live-mode');
-            
+
             // Xóa admin control indicator
             removeAdminControlIndicator();
-            
+
             // Dừng auto sync
             stopAdminAutoSync();
         }
@@ -3607,7 +4007,7 @@ function updateAdminUI() {
         adminControls.classList.add('hidden');
         loadVideoText.textContent = isLiveMode ? 'Thêm vào hàng đợi' : 'Phát Video';
         videoSection.classList.remove('live-mode-active');
-        
+
         if (isLiveMode) {
             videoContainer.classList.add('live-mode', 'disabled-interaction');
             addLiveStatusBar();
@@ -3618,10 +4018,10 @@ function updateAdminUI() {
             removeLiveModeMessage();
         }
     }
-    
+
     // Cập nhật player overlay
     updatePlayerOverlay();
-    
+
     // Reload player với settings mới nếu cần
     if (player && isPlayerReady) {
         updatePlayerControls();
@@ -3633,12 +4033,12 @@ let adminSyncInterval = null;
 
 function startAdminAutoSync() {
     if (adminSyncInterval) return;
-    
+
     // ⚡ OPTIMIZED: Faster sync with compact format and volatile
     adminSyncInterval = setInterval(() => {
         if (isAdmin && isLiveMode && player && isPlayerReady && !isSyncing) {
             const ps = player.getPlayerState();
-            
+
             // Only sync when playing to reduce traffic
             if (ps === YT.PlayerState.PLAYING) {
                 // Map YT states to compact: 0=paused, 1=playing, 2=buffering, 3=ended
@@ -3651,7 +4051,7 @@ function startAdminAutoSync() {
                 };
                 const compactState = stateMap[ps] !== undefined ? stateMap[ps] : 1;
                 const currentTime = Math.floor(player.getCurrentTime() * 10) / 10;
-                
+
                 // ⚡ Send compact format [state, time]
                 // Server will handle volatile emission
                 socket.emit('vs', [compactState, currentTime]);
@@ -3744,12 +4144,12 @@ function hideQueueModal() {
 
 function updateQueueDisplay() {
     queueCount.textContent = videoQueue.length;
-    
+
     if (videoQueue.length === 0) {
         queueList.innerHTML = '<div class="queue-empty"><p>Hàng đợi trống</p></div>';
         return;
     }
-    
+
     queueList.innerHTML = '';
     videoQueue.forEach(item => {
         const queueItem = document.createElement('div');
@@ -3772,25 +4172,25 @@ function updateQueueDisplay() {
                 </div>
             ` : ''}
         `;
-        
+
         // Add event listeners for the buttons
         if (isAdmin) {
             const playBtn = queueItem.querySelector('.queue-btn.play');
             const removeBtn = queueItem.querySelector('.queue-btn.remove');
-            
+
             if (playBtn) {
                 playBtn.addEventListener('click', () => {
                     playFromQueue(item.id);
                 });
             }
-            
+
             if (removeBtn) {
                 removeBtn.addEventListener('click', () => {
                     removeFromQueue(item.id);
                 });
             }
         }
-        
+
         queueList.appendChild(queueItem);
     });
 }
@@ -3831,28 +4231,28 @@ function cleanupRoomState() {
         } catch (error) {
         }
     }
-    
+
     // Reset các biến trạng thái
     isAdmin = false;
     adminId = null;
     isLiveMode = false;
     videoQueue = [];
     currentPrivateTarget = null;
-    
+
     // Ẩn các modal nếu đang mở
     hideUsersModal();
     hidePrivateMessageModal();
     hideFilePreviewModal();
     hideQueueModal();
     hideEmojiPicker();
-    
+
     // Ẩn admin controls
     adminControls.classList.add('hidden');
-    
+
     // Dọn dẹp UI
     updateAdminUI();
     updateQueueDisplay();
-    
+
     // Dừng auto sync nếu đang chạy
     stopAdminAutoSync();
 }
@@ -3864,7 +4264,7 @@ function redirectToHomePage() {
         socket.disconnect();
         socket = null;
     }
-    
+
     // Reset player
     if (player) {
         try {
@@ -3873,24 +4273,24 @@ function redirectToHomePage() {
         }
         player = null;
     }
-    
+
     // Reset các biến global
     currentRoom = null;
     currentUser = null;
     isPlayerReady = false;
     isSyncing = false;
     usersData = [];
-    
+
     // Hiển thị video placeholder
     videoPlaceholder.style.display = 'flex';
-    
+
     // Reset các input
     usernameInput.value = '';
     roomIdInput.value = '';
     adminPasswordInput.value = '';
     youtubeUrlInput.value = '';
     chatInput.value = '';
-    
+
     // Xóa tất cả tin nhắn chat
     chatMessages.innerHTML = `
         <div class="message welcome-message">
@@ -3900,19 +4300,19 @@ function redirectToHomePage() {
             </div>
         </div>
     `;
-    
+
     // Reset displays
     userCountDisplay.textContent = '0 người online';
     currentUserDisplay.textContent = '';
     roomIdDisplay.textContent = '';
-    
+
     // Hiển thị modal tham gia phòng
     showJoinModal();
-    
+
 }
 
 // Handle window beforeunload
-window.addEventListener('beforeunload', function() {
+window.addEventListener('beforeunload', function () {
     if (socket) {
         socket.disconnect();
     }

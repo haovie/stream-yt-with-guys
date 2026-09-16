@@ -189,6 +189,18 @@
                                         </div>
                                     </div>
                                     
+                                    <!-- Audio Track Selector -->
+                                    <div class="audio-track-control" id="audio-track-control">
+                                        <button id="audio-track-btn" class="control-btn" title="Audio Track / Âm thanh">
+                                            <i class="fas fa-music"></i>
+                                        </button>
+                                        <div class="audio-track-menu" id="audio-track-menu">
+                                            <div class="audio-track-option active" data-track="default">Mặc định (Original)</div>
+                                            <!-- Audio tracks will be populated dynamically -->
+                                        </div>
+                                    </div>
+                                    <audio id="custom-audio-player" style="display:none;" preload="auto"></audio>
+                                    
                                     <button id="settings-btn" class="control-btn" title="Settings">
                                         <i class="fas fa-cog"></i>
                                     </button>

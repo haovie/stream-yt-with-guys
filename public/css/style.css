@@ -1993,36 +1993,42 @@ body.ios-fullscreen-active {
     opacity: 1;
 }
 
-/* Speed, Quality & Caption Controls */
+/* Speed, Quality & Caption & Audio Track Controls */
 .speed-control,
 .quality-control,
-.caption-control {
+.caption-control,
+.audio-track-control {
     position: relative;
     display: inline-block;
 }
 
 /* Active state for caption button when captions are on */
-#caption-btn.active {
+#caption-btn.active,
+#audio-track-btn.active {
     background: rgba(255, 255, 255, 0.2);
     color: #4fc3f7;
 }
 
-#caption-btn.active i {
+#caption-btn.active i,
+#audio-track-btn.active i {
     color: #4fc3f7;
 }
 
-/* Disabled state when video has no captions */
-#caption-btn.disabled {
+/* Disabled state when video has no captions/audio tracks */
+#caption-btn.disabled,
+#audio-track-btn.disabled {
     opacity: 0.5;
 }
 
-#caption-btn.disabled:hover {
+#caption-btn.disabled:hover,
+#audio-track-btn.disabled:hover {
     background: rgba(255, 255, 255, 0.05);
 }
 
 .speed-control.admin-only,
 .quality-control.admin-only,
-.caption-control.admin-only {
+.caption-control.admin-only,
+.audio-track-control.admin-only {
     display: none; /* Hidden by default */
 }
 
@@ -2051,7 +2057,8 @@ body.is-live-mode:not(.is-admin) .admin-only {
 
 .speed-menu,
 .quality-menu,
-.caption-menu {
+.caption-menu,
+.audio-track-menu {
     position: absolute;
     bottom: 50px;
     right: 0;
@@ -2060,7 +2067,7 @@ body.is-live-mode:not(.is-admin) .admin-only {
     -webkit-backdrop-filter: blur(10px);
     border-radius: 8px;
     padding: 8px 0;
-    min-width: 120px;
+    min-width: 140px;
     max-height: 300px;
     overflow-y: auto;
     opacity: 0;
@@ -2073,7 +2080,8 @@ body.is-live-mode:not(.is-admin) .admin-only {
 
 .speed-menu.visible,
 .quality-menu.visible,
-.caption-menu.visible {
+.caption-menu.visible,
+.audio-track-menu.visible {
     opacity: 1;
     visibility: visible;
     transform: translateY(0);
@@ -2081,7 +2089,8 @@ body.is-live-mode:not(.is-admin) .admin-only {
 
 .speed-option,
 .quality-option,
-.caption-option {
+.caption-option,
+.audio-track-option {
     padding: 10px 16px;
     color: white;
     cursor: pointer;
@@ -2095,7 +2104,8 @@ body.is-live-mode:not(.is-admin) .admin-only {
 }
 
 .caption-option i,
-.quality-option i {
+.quality-option i,
+.audio-track-option i {
     width: 16px;
     font-size: 13px;
     opacity: 0.8;
@@ -2104,12 +2114,15 @@ body.is-live-mode:not(.is-admin) .admin-only {
 /* Loading and unavailable states */
 .caption-loading,
 .caption-unavailable,
-.quality-loading {
+.quality-loading,
+.audio-track-loading,
+.audio-track-unavailable {
     font-style: italic;
 }
 
 .caption-loading i.fa-spin,
-.quality-loading i.fa-spin {
+.quality-loading i.fa-spin,
+.audio-track-loading i.fa-spin {
     animation: spin 1s linear infinite;
 }
 
@@ -2120,13 +2133,15 @@ body.is-live-mode:not(.is-admin) .admin-only {
 
 .speed-option:hover,
 .quality-option:hover,
-.caption-option:hover {
+.caption-option:hover,
+.audio-track-option:hover {
     background: rgba(255, 255, 255, 0.1);
 }
 
 .speed-option.active,
 .quality-option.active,
-.caption-option.active {
+.caption-option.active,
+.audio-track-option.active {
     background: rgba(255, 255, 255, 0.2);
     color: #4fc3f7;
     font-weight: 600;
@@ -2134,28 +2149,33 @@ body.is-live-mode:not(.is-admin) .admin-only {
 
 .speed-option.active::after,
 .quality-option.active::after,
-.caption-option.active::after {
+.caption-option.active::after,
+.audio-track-option.active::after {
     content: '✓';
     float: right;
     margin-left: 10px;
 }
 
 /* Scrollbar for menus */
-.caption-menu::-webkit-scrollbar {
+.caption-menu::-webkit-scrollbar,
+.audio-track-menu::-webkit-scrollbar {
     width: 6px;
 }
 
-.caption-menu::-webkit-scrollbar-track {
+.caption-menu::-webkit-scrollbar-track,
+.audio-track-menu::-webkit-scrollbar-track {
     background: rgba(255, 255, 255, 0.1);
     border-radius: 3px;
 }
 
-.caption-menu::-webkit-scrollbar-thumb {
+.caption-menu::-webkit-scrollbar-thumb,
+.audio-track-menu::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.3);
     border-radius: 3px;
 }
 
-.caption-menu::-webkit-scrollbar-thumb:hover {
+.caption-menu::-webkit-scrollbar-thumb:hover,
+.audio-track-menu::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.5);
 }
 
