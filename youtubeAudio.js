@@ -634,18 +634,20 @@ async function extractAudioTracks(urlOrId) {
   }
 
   // Strategy C: Fallback qua yt-dlp (đặc biệt tin cậy trên Server / Cloud IP)
+  let lastError = null;
   try {
     const ytDlpResult = await extractViaYtDlp(videoId);
     if (ytDlpResult && ytDlpResult.tracks && ytDlpResult.tracks.length > 0) {
       return ytDlpResult;
     }
   } catch (err) {
-    // yt-dlp thất bại
+    lastError = err;
+    console.warn(`[audio-tracks] Strategy C (yt-dlp) thất bại: ${err.message}`);
   }
 
   throw new YouTubeAudioError(
     ERROR_CODES.ERR_NO_AUDIO_TRACKS,
-    `Không tìm thấy audio tracks cho video ID: ${videoId}`
+    `Không tìm thấy audio tracks cho video ID: ${videoId}${lastError ? ` - Lỗi yt-dlp: ${lastError.message}` : ''}`
   );
 }
 
@@ -1004,5 +1006,6 @@ module.exports = {
   isStreamUrlExpired,
   resolveAudioStreamUrl,
   streamAudioTrack,
-  mergeAudioVideoStreams
+  mergeAudioVideoStreams,
+  executeYtDlp
 };

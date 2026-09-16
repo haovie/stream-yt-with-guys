@@ -149,6 +149,63 @@ app.get('/api/youtube/audio-tracks', async (req, res) => {
   }
 });
 
+// Endpoint chẩn đoán hệ thống âm thanh YouTube
+app.get('/api/youtube/debug', async (req, res) => {
+  const { execFile } = require('child_process');
+  const videoId = req.query.videoId || 'Qtl8lJwbd4g';
+  const fs = require('fs');
+
+  const results = {
+    platform: process.platform,
+    user: process.env.USER || 'unknown',
+    envPath: process.env.PATH,
+    cookieFileExists: fs.existsSync(path.join(__dirname, 'cookies.txt'))
+  };
+
+  const checkCmd = (cmd, args) => new Promise(resolve => {
+    execFile(cmd, args, { timeout: 10000 }, (err, stdout, stderr) => {
+      resolve({
+        cmd: `${cmd} ${args.join(' ')}`,
+        success: !err,
+        code: err?.code,
+        stdout: stdout?.trim(),
+        stderr: stderr?.trim(),
+        error: err?.message
+      });
+    });
+  });
+
+  results.checks = [
+    await checkCmd('which', ['yt-dlp']),
+    await checkCmd('which', ['python3']),
+    await checkCmd('which', ['ffmpeg']),
+    await checkCmd('yt-dlp', ['--version'])
+  ];
+
+  try {
+    const { stdout } = await youtubeAudio.executeYtDlp([
+      '-J', '--skip-download', `https://www.youtube.com/watch?v=${videoId}`
+    ], { timeout: 35000 });
+    const info = JSON.parse(stdout);
+    const audioFormats = (info.formats || []).filter(f => (f.vcodec === 'none' || !f.vcodec) && (f.acodec && f.acodec !== 'none'));
+    results.videoExtraction = {
+      success: true,
+      title: info.title,
+      totalFormats: (info.formats || []).length,
+      audioFormatsCount: audioFormats.length,
+      sampleAudioLanguages: [...new Set(audioFormats.map(f => f.language || f.format_note))].slice(0, 10)
+    };
+  } catch (err) {
+    results.videoExtraction = {
+      success: false,
+      error: err.message,
+      stderr: err.stderr || err.details
+    };
+  }
+
+  res.json(results);
+});
+
 // Stream audio track độc lập (hỗ trợ HTTP Range requests)
 app.get('/api/youtube/audio-stream', async (req, res) => {
   try {
