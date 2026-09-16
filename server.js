@@ -120,13 +120,17 @@ app.get('/api/youtube/audio-tracks/:videoId', async (req, res) => {
   }
 
   try {
-    const tracks = await youtubeAudio.getAudioTracks(videoId);
+    const details = await youtubeAudio.getAudioTracksDetails(videoId);
     res.json({
       success: true,
       videoId: videoId,
-      tracks: tracks,
-      count: tracks.length,
-      isFallback: tracks.length <= 1
+      tracks: details.tracks,
+      count: details.tracks.length,
+      isFallback: details.isFallback,
+      errorCode: details.errorCode,
+      message: details.message,
+      action: details.action,
+      hasCookies: details.hasCookies
     });
   } catch (err) {
     console.error(JSON.stringify({
@@ -144,6 +148,7 @@ app.get('/api/youtube/audio-tracks/:videoId', async (req, res) => {
       success: true,
       videoId: videoId,
       isFallback: true,
+      errorCode: 'API_EXCEPTION',
       warning: err.message,
       tracks: [{
         id: 'default',

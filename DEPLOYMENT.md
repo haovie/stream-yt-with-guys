@@ -378,9 +378,57 @@ docker run -d -p 3000:3000 \
 | **SSL** | Miễn phí | Cần cài | Cần cài |
 | **Khuyên dùng cho** | Beginners | Developers | DevOps/Teams |
 
+
+---
+
+## 🍪 Cấu hình YouTube Multi-Audio & Cookies (Production)
+
+Khi deploy trên môi trường Cloud / VPS (DigitalOcean, AWS, GCP, Hetzner...), IP của datacenter thường bị YouTube yêu cầu xác thực bot (`Sign in to confirm you're not a bot` / `HTTP 429 Too Many Requests`). Ứng dụng đã được trang bị cơ chế tự động fallback an toàn (không bao giờ trả về HTTP 500) và hỗ trợ nạp cookies xác thực từ server.
+
+### 1. Cách lấy Cookies YouTube (định dạng Netscape `cookies.txt`)
+1. Cài đặt tiện ích mở rộng Chrome/Firefox: **Get cookies.txt LOCALLY** (hoặc **Cookie-Editor**).
+2. Mở trình duyệt và truy cập [YouTube](https://www.youtube.com).
+3. Đăng nhập tài khoản YouTube của bạn (tài khoản phụ hoặc chính).
+4. Mở tiện ích mở rộng và chọn **Export** / **Export as Netscape format**.
+5. Bạn sẽ nhận được nội dung cookie dạng text.
+
+### 2. Cách nạp Cookies vào Production Server
+
+#### Cách A: Dùng Environment Variable (Khuyên dùng cho DigitalOcean App Platform / Render / Railway)
+1. Trong cấu hình **Environment Variables** của App Platform, thêm:
+   - Key: `YOUTUBE_COOKIES_TEXT`
+   - Value: Dán toàn bộ nội dung file `cookies.txt` vào đây.
+   *(Hoặc mã hóa base64 nội dung file `base64 -w 0 cookies.txt` rồi đặt vào biến `YOUTUBE_COOKIES_BASE64`)*
+2. Save và Re-deploy.
+
+#### Cách B: Mount file `cookies.txt` vào Docker Container (Khuyên dùng cho Docker / Droplet VPS)
+1. Copy file `cookies.txt` lên server:
+   ```bash
+   scp cookies.txt root@<YOUR_DROPLET_IP>:/root/stream/cookies.txt
+   ```
+2. Thêm volume vào `docker-compose.yml`:
+   ```yaml
+   services:
+     app:
+       # ...
+       volumes:
+         - ./cookies.txt:/app/cookies.txt:ro
+   ```
+3. Restart lại container:
+   ```bash
+   docker-compose up -d --build
+   ```
+
+### 3. Kiểm tra hoạt động
+Endpoint `/api/youtube/audio-tracks/:videoId` sẽ trả về `hasCookies: true` cùng danh sách đầy đủ tất cả audio track (ví dụ tiếng Việt lồng tiếng, tiếng Anh gốc, v.v.).
+
 ---
 
 ## 🛠️ Troubleshooting
+
+### Lỗi YouTube Bot Challenge (`Sign in to confirm you're not a bot`)
+- **Triệu chứng**: Endpoint trả về `isFallback: true` với `errorCode: "YOUTUBE_BOT_DETECTION"`. Video vẫn phát bình thường bằng audio mặc định của YouTube Player.
+- **Cách xử lý**: Nạp biến môi trường `YOUTUBE_COOKIES_TEXT` hoặc copy file `cookies.txt` lên server như hướng dẫn ở trên.
 
 ### App không start được
 

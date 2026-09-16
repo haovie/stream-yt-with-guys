@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Cache audio tracks and direct URLs in memory with TTL (15 minutes)
-const trackCache = new Map(); // videoId -> { tracks, timestamp }
+const trackCache = new Map(); // videoId -> { tracks, resultInfo, timestamp }
 const streamUrlCache = new Map(); // `${videoId}_${trackId}` -> { url, expiresAt }
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
@@ -77,6 +77,139 @@ function logAudio(level, message, meta = {}) {
 }
 
 /**
+ * Categorize YouTube bot detection and error responses
+ */
+function categorizeYouTubeError(errMessage, stderr = '') {
+    const combined = `${errMessage || ''} ${stderr || ''}`.toLowerCase();
+    
+    if (combined.includes('sign in to confirm you’re not a bot') || 
+        combined.includes('sign in to confirm you\'re not a bot') ||
+        combined.includes('bot detection') ||
+        combined.includes('automated queries')) {
+        return {
+            code: 'YOUTUBE_BOT_DETECTION',
+            message: 'YouTube phát hiện truy vấn tự động và yêu cầu xác thực bot trên IP máy chủ.',
+            action: 'Cần cấu hình YOUTUBE_COOKIES_TEXT hoặc YOUTUBE_COOKIES_FILE trên server.'
+        };
+    }
+
+    if (combined.includes('http error 429') || combined.includes('too many requests')) {
+        return {
+            code: 'YOUTUBE_RATE_LIMITED',
+            message: 'YouTube giới hạn tần suất truy vấn (Rate Limited HTTP 429).',
+            action: 'Chờ đợi hoặc sử dụng cookies xác thực từ server.'
+        };
+    }
+
+    if (combined.includes('confirm your age') || combined.includes('age-restricted') || combined.includes('age restricted')) {
+        return {
+            code: 'YOUTUBE_AGE_RESTRICTED',
+            message: 'Video giới hạn độ tuổi yêu cầu đăng nhập tài khoản.',
+            action: 'Cần cung cấp cookies của tài khoản đã xác minh độ tuổi.'
+        };
+    }
+
+    if (combined.includes('not available in your country') || combined.includes('geo-restricted')) {
+        return {
+            code: 'YOUTUBE_GEO_RESTRICTED',
+            message: 'Video bị giới hạn vùng địa lý đối với IP của server.',
+            action: 'Video không phát được từ quốc gia của máy chủ.'
+        };
+    }
+
+    if (combined.includes('private video') || combined.includes('members-only')) {
+        return {
+            code: 'YOUTUBE_ACCESS_DENIED',
+            message: 'Video riêng tư hoặc chỉ dành cho hội viên.',
+            action: 'Video yêu cầu quyền truy cập đặc biệt.'
+        };
+    }
+
+    return {
+        code: 'YOUTUBE_EXTRACTION_FAILED',
+        message: errMessage || 'Không thể trích xuất metadata từ YouTube.',
+        action: 'Tự động sử dụng audio mặc định từ YouTube player.'
+    };
+}
+
+/**
+ * Resolve cookies file path from environment or local filesystem
+ */
+function getCookiesFilePath() {
+    // 1. Direct environment variable path
+    if (process.env.YOUTUBE_COOKIES_FILE && fs.existsSync(process.env.YOUTUBE_COOKIES_FILE)) {
+        return process.env.YOUTUBE_COOKIES_FILE;
+    }
+
+    // 2. Cookie text/base64 passed via environment variable (ideal for Docker / Cloud platforms)
+    const rawCookieData = process.env.YOUTUBE_COOKIES_TEXT || process.env.YOUTUBE_COOKIES_BASE64;
+    if (rawCookieData && rawCookieData.trim()) {
+        try {
+            const cookieContent = process.env.YOUTUBE_COOKIES_BASE64 
+                ? Buffer.from(rawCookieData.trim(), 'base64').toString('utf8')
+                : rawCookieData.trim();
+            
+            const tempCookiePath = path.join('/tmp', 'yt_session_cookies.txt');
+            fs.writeFileSync(tempCookiePath, cookieContent, 'utf8');
+            return tempCookiePath;
+        } catch (e) {
+            logAudio('warn', `Failed to write cookies from environment variable: ${e.message}`);
+        }
+    }
+
+    // 3. Local workspace cookies.txt file
+    const localCookiePath = path.join(__dirname, 'cookies.txt');
+    if (fs.existsSync(localCookiePath)) {
+        return localCookiePath;
+    }
+
+    // 4. Standard Linux /etc path
+    if (fs.existsSync('/etc/youtube-cookies.txt')) {
+        return '/etc/youtube-cookies.txt';
+    }
+
+    return null;
+}
+
+/**
+ * Parse cookies file to HTTP Cookie header string
+ */
+function getCookiesHeaderString() {
+    const cookieFile = getCookiesFilePath();
+    const defaultConsent = 'PREF=hl=vi&gl=VN; SOCS=CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODI5LjA3X3AwGgJ2aSACGgYIgLCnpgY;';
+
+    if (!cookieFile || !fs.existsSync(cookieFile)) {
+        return defaultConsent;
+    }
+
+    try {
+        const lines = fs.readFileSync(cookieFile, 'utf8').split('\n');
+        const cookiePairs = [];
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+            const parts = trimmed.split('\t');
+            if (parts.length >= 7) {
+                const name = parts[5];
+                const value = parts[6];
+                if (name && value) {
+                    cookiePairs.push(`${name}=${value}`);
+                }
+            }
+        }
+
+        if (cookiePairs.length > 0) {
+            return cookiePairs.join('; ');
+        }
+    } catch (err) {
+        logAudio('warn', `Failed to parse cookies file for HTTP header: ${err.message}`);
+    }
+
+    return defaultConsent;
+}
+
+/**
  * Resolve yt-dlp binary path taking OS platform into account
  */
 function getYtDlpPath() {
@@ -88,7 +221,7 @@ function getYtDlpPath() {
     }
 
     if (isLinux) {
-        // Standard Linux paths
+        // Standard Linux paths in Docker & VPS
         candidates.push('/usr/local/bin/yt-dlp', '/usr/bin/yt-dlp', 'yt-dlp');
     } else {
         // macOS / Windows local development paths
@@ -113,7 +246,7 @@ function getYtDlpPath() {
             }
         }
     }
-    return 'yt-dlp'; // fallback to PATH lookup
+    return 'yt-dlp';
 }
 
 /**
@@ -132,7 +265,7 @@ function getLanguageDisplayName(langCode, formatNote) {
 }
 
 /**
- * Fetch HTML of YouTube watch page with realistic headers and cookies
+ * Fetch HTML of YouTube watch page with cookies and anti-bot headers
  */
 function fetchWatchPage(videoId, redirectCount = 0) {
     return new Promise((resolve, reject) => {
@@ -141,6 +274,8 @@ function fetchWatchPage(videoId, redirectCount = 0) {
         }
 
         const url = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&hl=vi`;
+        const cookieHeader = getCookiesHeaderString();
+
         const headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -150,8 +285,7 @@ function fetchWatchPage(videoId, redirectCount = 0) {
             'Sec-Fetch-Site': 'none',
             'Sec-Fetch-User': '?1',
             'Upgrade-Insecure-Requests': '1',
-            // Pre-seed Google consent and language cookies to bypass consent interstitials
-            'Cookie': 'PREF=hl=vi&gl=VN; SOCS=CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODI5LjA3X3AwGgJ2aSACGgYIgLCnpgY;'
+            'Cookie': cookieHeader
         };
 
         const req = https.get(url, { headers, timeout: 10000 }, (res) => {
@@ -187,6 +321,15 @@ async function extractTracksFromWatchPage(videoId) {
     try {
         const html = await fetchWatchPage(videoId);
         if (!html) return null;
+
+        // Check for bot detection in HTML
+        if (html.includes('Sign in to confirm you’re not a bot') || html.includes('Sign in to confirm you\'re not a bot')) {
+            logAudio('warn', 'YouTube Bot Challenge detected in Watch Page HTML', { 
+                videoId, 
+                errorCode: 'YOUTUBE_BOT_DETECTION' 
+            });
+            return null;
+        }
 
         const match = html.match(/ytInitialPlayerResponse\s*=\s*({.+?});(?:var|\n|<\/script>)/s);
         if (!match) {
@@ -247,37 +390,52 @@ async function extractTracksFromWatchPage(videoId) {
         logAudio('info', `Watch page parser extracted ${trackMap.size} tracks`, { videoId, count: trackMap.size });
         return Array.from(trackMap.values());
     } catch (err) {
-        logAudio('warn', `Watch page parser error: ${err.message}`, { videoId, stack: err.stack });
+        logAudio('warn', `Watch page parser error: ${err.message}`, { videoId });
         return null;
     }
 }
 
 /**
- * Layer 1: Extract audio tracks and formats using yt-dlp
+ * Layer 1: Extract audio tracks and formats using yt-dlp (with cookies and anti-bot flags)
  */
 function extractTracksWithYtDlp(videoId) {
     return new Promise((resolve) => {
         const ytDlp = getYtDlpPath();
         if (!ytDlp) {
             logAudio('info', 'yt-dlp binary not found, skipping yt-dlp extraction', { videoId });
-            return resolve(null);
+            return resolve({ tracks: null, error: { code: 'YTDLP_NOT_FOUND', message: 'yt-dlp binary not installed' } });
         }
+
+        const cookiePath = getCookiesFilePath();
+        const hasCookies = !!cookiePath;
 
         const args = [
             '-J',
             '--flat-playlist',
             '--no-warnings',
             '--no-check-certificates',
-            `https://www.youtube.com/watch?v=${videoId}`
+            '--socket-timeout', '12',
+            '--extractor-args', 'youtube:player_client=web,android,ios',
+            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
         ];
+
+        // Attach cookies if available
+        if (hasCookies) {
+            args.push('--cookies', cookiePath);
+        }
+
+        args.push(`https://www.youtube.com/watch?v=${videoId}`);
 
         execFile(ytDlp, args, { maxBuffer: 25 * 1024 * 1024, timeout: 15000 }, (error, stdout, stderr) => {
             if (error || !stdout) {
-                logAudio('warn', `yt-dlp execution failed: ${error ? error.message : 'No output'}`, { 
+                const errorInfo = categorizeYouTubeError(error ? error.message : 'No output', stderr);
+                logAudio('warn', `yt-dlp extraction failed: ${errorInfo.code} - ${errorInfo.message}`, { 
                     videoId, 
-                    stderr: stderr ? stderr.substring(0, 200) : null 
+                    errorCode: errorInfo.code,
+                    hasCookies,
+                    stderr: stderr ? stderr.substring(0, 300) : null 
                 });
-                return resolve(null);
+                return resolve({ tracks: null, error: errorInfo });
             }
 
             try {
@@ -286,7 +444,7 @@ function extractTracksWithYtDlp(videoId) {
                 const audioFormats = formats.filter(f => f.vcodec === 'none' && f.acodec !== 'none');
 
                 if (audioFormats.length === 0) {
-                    return resolve(null);
+                    return resolve({ tracks: null, error: { code: 'NO_AUDIO_FORMATS', message: 'No audio formats found in yt-dlp metadata' } });
                 }
 
                 const trackMap = new Map();
@@ -305,7 +463,7 @@ function extractTracksWithYtDlp(videoId) {
                 const hasMultiTracks = audioFormats.some(f => f.language || (f.format_note && (f.format_note.includes('dubbed') || f.format_note.includes('original'))));
 
                 if (!hasMultiTracks) {
-                    return resolve(Array.from(trackMap.values()));
+                    return resolve({ tracks: Array.from(trackMap.values()), error: null });
                 }
 
                 audioFormats.forEach((f) => {
@@ -350,37 +508,58 @@ function extractTracksWithYtDlp(videoId) {
                     return rest;
                 });
 
-                logAudio('info', `yt-dlp successfully parsed ${result.length} tracks`, { videoId, count: result.length });
-                resolve(result);
+                logAudio('info', `yt-dlp successfully parsed ${result.length} tracks`, { 
+                    videoId, 
+                    count: result.length, 
+                    hasCookies 
+                });
+                resolve({ tracks: result, error: null });
             } catch (parseErr) {
                 logAudio('warn', `Failed to parse yt-dlp JSON: ${parseErr.message}`, { videoId });
-                resolve(null);
+                resolve({ tracks: null, error: { code: 'PARSE_JSON_ERROR', message: parseErr.message } });
             }
         });
     });
 }
 
 /**
- * Get available audio tracks with automatic fallback and memory cache
+ * Get available audio tracks details including diagnosis metadata and safe fallbacks
  */
-async function getAudioTracks(videoId) {
+async function getAudioTracksDetails(videoId) {
     if (!videoId || typeof videoId !== 'string') {
         throw new Error('Invalid video ID');
     }
 
+    const cookiePath = getCookiesFilePath();
+    const hasCookies = !!cookiePath;
+
     // Check memory cache
     const cached = trackCache.get(videoId);
     if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
-        return cached.tracks;
+        return {
+            tracks: cached.tracks,
+            isFallback: cached.isFallback,
+            errorCode: cached.errorCode,
+            message: cached.message,
+            action: cached.action,
+            hasCookies
+        };
     }
 
     let tracks = null;
+    let lastError = null;
 
     // Layer 1: yt-dlp
     try {
-        tracks = await extractTracksWithYtDlp(videoId);
+        const ytdlpResult = await extractTracksWithYtDlp(videoId);
+        if (ytdlpResult && ytdlpResult.tracks) {
+            tracks = ytdlpResult.tracks;
+        } else if (ytdlpResult && ytdlpResult.error) {
+            lastError = ytdlpResult.error;
+        }
     } catch (e) {
-        logAudio('warn', `yt-dlp layer error: ${e.message}`, { videoId });
+        logAudio('warn', `yt-dlp layer exception: ${e.message}`, { videoId });
+        lastError = categorizeYouTubeError(e.message);
     }
 
     // Layer 2: Watch Page Scraper if yt-dlp failed or only returned 1 track
@@ -389,15 +568,17 @@ async function getAudioTracks(videoId) {
             const watchPageTracks = await extractTracksFromWatchPage(videoId);
             if (watchPageTracks && watchPageTracks.length > 1) {
                 tracks = watchPageTracks;
+                lastError = null; // Successfully extracted via Watch Page
             }
         } catch (e) {
-            logAudio('warn', `Watch page layer error: ${e.message}`, { videoId });
+            logAudio('warn', `Watch page layer exception: ${e.message}`, { videoId });
+            if (!lastError) lastError = categorizeYouTubeError(e.message);
         }
     }
 
-    // Layer 3: Safe Fallback to default YouTube track (guarantees no 500 error)
+    // Layer 3: Safe Fallback to default YouTube track (guarantees no 500 error on server)
+    const isFallback = !tracks || tracks.length <= 1;
     if (!tracks || tracks.length === 0) {
-        logAudio('info', `No multi-language tracks found, falling back to default track`, { videoId });
         tracks = [{
             id: 'default',
             formatId: 'default',
@@ -410,13 +591,37 @@ async function getAudioTracks(videoId) {
         }];
     }
 
-    // Cache the result
-    trackCache.set(videoId, {
+    const details = {
         tracks: tracks,
+        isFallback: isFallback,
+        errorCode: isFallback && lastError ? lastError.code : undefined,
+        message: isFallback && lastError ? lastError.message : undefined,
+        action: isFallback && lastError ? lastError.action : undefined,
+        hasCookies: hasCookies,
         timestamp: Date.now()
-    });
+    };
 
-    return tracks;
+    if (isFallback) {
+        logAudio('info', `Using fallback default audio track for video`, { 
+            videoId, 
+            hasCookies,
+            errorCode: details.errorCode,
+            suggestion: hasCookies ? undefined : 'Set YOUTUBE_COOKIES_TEXT or YOUTUBE_COOKIES_FILE in server environment to bypass bot detection.'
+        });
+    }
+
+    // Cache the result
+    trackCache.set(videoId, details);
+
+    return details;
+}
+
+/**
+ * Get available audio tracks (array only)
+ */
+async function getAudioTracks(videoId) {
+    const details = await getAudioTracksDetails(videoId);
+    return details.tracks;
 }
 
 /**
@@ -445,21 +650,39 @@ async function getAudioStreamUrl(videoId, trackId) {
         return track.url;
     }
 
-    // Extract direct URL via yt-dlp -g
+    // Extract direct URL via yt-dlp -g with cookies
     const ytDlp = getYtDlpPath();
     if (ytDlp) {
         return new Promise((resolve, reject) => {
             const formatArg = track.formatId && track.formatId !== 'default' ? track.formatId : 'ba/b';
+            const cookiePath = getCookiesFilePath();
+
             const args = [
                 '-g',
                 '-f', formatArg,
                 '--no-warnings',
-                `https://www.youtube.com/watch?v=${videoId}`
+                '--no-check-certificates',
+                '--socket-timeout', '12',
+                '--extractor-args', 'youtube:player_client=web,android,ios',
+                '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
             ];
 
-            execFile(ytDlp, args, { timeout: 12000 }, (error, stdout) => {
+            if (cookiePath) {
+                args.push('--cookies', cookiePath);
+            }
+
+            args.push(`https://www.youtube.com/watch?v=${videoId}`);
+
+            execFile(ytDlp, args, { timeout: 12000 }, (error, stdout, stderr) => {
                 if (error || !stdout || !stdout.trim()) {
-                    return reject(new Error(`Failed to resolve stream URL with yt-dlp: ${error ? error.message : 'Empty output'}`));
+                    const errInfo = categorizeYouTubeError(error ? error.message : 'Empty stream output', stderr);
+                    logAudio('warn', `Failed to resolve stream URL with yt-dlp: ${errInfo.code}`, {
+                        videoId,
+                        trackId,
+                        errorCode: errInfo.code,
+                        stderr: stderr ? stderr.substring(0, 200) : null
+                    });
+                    return reject(new Error(errInfo.message));
                 }
 
                 const url = stdout.trim().split('\n')[0];
@@ -476,7 +699,7 @@ async function getAudioStreamUrl(videoId, trackId) {
 }
 
 /**
- * Stream audio track to HTTP response supporting Range requests
+ * Stream audio track to HTTP response supporting Range requests and bot challenge handling
  */
 async function streamAudioTrack(req, res, videoId, trackId) {
     try {
@@ -486,7 +709,11 @@ async function streamAudioTrack(req, res, videoId, trackId) {
 
         const streamUrl = await getAudioStreamUrl(videoId, trackId);
         if (!streamUrl) {
-            return res.status(404).json({ error: 'Audio stream URL not found' });
+            return res.status(404).json({ 
+                success: false, 
+                errorCode: 'YOUTUBE_STREAM_NOT_FOUND',
+                error: 'Audio stream URL not found' 
+            });
         }
 
         const clientReqHeaders = {};
@@ -496,7 +723,8 @@ async function streamAudioTrack(req, res, videoId, trackId) {
         clientReqHeaders['User-Agent'] = req.headers['user-agent'] || 'Mozilla/5.0';
 
         const proxyReq = https.get(streamUrl, {
-            headers: clientReqHeaders
+            headers: clientReqHeaders,
+            timeout: 15000
         }, (proxyRes) => {
             // Forward status code (206 Partial Content or 200 OK)
             res.status(proxyRes.statusCode);
@@ -527,7 +755,11 @@ async function streamAudioTrack(req, res, videoId, trackId) {
         proxyReq.on('error', (err) => {
             logAudio('error', `Proxy stream error: ${err.message}`, { videoId, trackId });
             if (!res.headersSent) {
-                res.status(502).json({ error: 'Failed to stream audio from source' });
+                res.status(502).json({ 
+                    success: false,
+                    errorCode: 'YOUTUBE_PROXY_ERROR',
+                    error: 'Failed to stream audio from source' 
+                });
             }
         });
 
@@ -536,16 +768,30 @@ async function streamAudioTrack(req, res, videoId, trackId) {
         });
 
     } catch (err) {
-        logAudio('error', `Stream handler exception: ${err.message}`, { videoId, trackId, stack: err.stack });
+        const errorInfo = categorizeYouTubeError(err.message);
+        logAudio('warn', `Stream handler exception: ${errorInfo.code} - ${errorInfo.message}`, { 
+            videoId, 
+            trackId, 
+            errorCode: errorInfo.code 
+        });
         if (!res.headersSent) {
-            res.status(500).json({ error: err.message });
+            res.status(403).json({ 
+                success: false,
+                errorCode: errorInfo.code,
+                error: errorInfo.message,
+                action: errorInfo.action
+            });
         }
     }
 }
 
 module.exports = {
     getAudioTracks,
+    getAudioTracksDetails,
     getAudioStreamUrl,
     streamAudioTrack,
-    getYtDlpPath
+    getYtDlpPath,
+    getCookiesFilePath,
+    categorizeYouTubeError
 };
+
