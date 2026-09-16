@@ -4,8 +4,9 @@ const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-// Cache audio tracks and direct URLs in memory with TTL (15 minutes)
-const trackCache = new Map(); // videoId -> { tracks, resultInfo, timestamp }
+// Cache audio tracks, raw formats, and direct URLs in memory with TTL (15 minutes)
+const trackCache = new Map(); // videoId -> { tracks, isFallback, errorCode, message, action, hasCookies, timestamp }
+const rawFormatsCache = new Map(); // videoId -> { formats, timestamp }
 const streamUrlCache = new Map(); // `${videoId}_${trackId}` -> { url, expiresAt }
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
@@ -411,7 +412,6 @@ function extractTracksWithYtDlp(videoId) {
 
         const args = [
             '-J',
-            '--flat-playlist',
             '--no-warnings',
             '--no-check-certificates',
             '--socket-timeout', '12',
@@ -441,7 +441,18 @@ function extractTracksWithYtDlp(videoId) {
             try {
                 const json = JSON.parse(stdout);
                 const formats = json.formats || [];
-                const audioFormats = formats.filter(f => f.vcodec === 'none' && f.acodec !== 'none');
+                
+                // Cache raw formats list for instant stream URL resolution
+                rawFormatsCache.set(videoId, {
+                    formats: formats,
+                    timestamp: Date.now()
+                });
+
+                const audioFormats = formats.filter(f => 
+                    (f.vcodec === 'none' && f.acodec !== 'none') || 
+                    (f.mimeType && f.mimeType.startsWith('audio/')) ||
+                    f.audioTrack
+                );
 
                 if (audioFormats.length === 0) {
                     return resolve({ tracks: null, error: { code: 'NO_AUDIO_FORMATS', message: 'No audio formats found in yt-dlp metadata' } });
@@ -496,6 +507,7 @@ function extractTracksWithYtDlp(videoId) {
                             isDubbed: isDubbed,
                             audioQuality: f.abr ? `${Math.round(f.abr)} kbps` : 'medium',
                             bitrate: f.tbr || f.abr || 128,
+                            acodec: f.acodec,
                             ext: f.ext,
                             url: f.url,
                             _score: score
@@ -520,6 +532,60 @@ function extractTracksWithYtDlp(videoId) {
             }
         });
     });
+}
+
+/**
+ * Match best audio format from real format metadata without hardcoded assumptions
+ */
+function findBestAudioFormat(formats, targetTrackId) {
+    if (!formats || !Array.isArray(formats) || formats.length === 0) return null;
+
+    const audioFormats = formats.filter(f => 
+        (f.vcodec === 'none' && f.acodec !== 'none') ||
+        (f.mimeType && f.mimeType.startsWith('audio/')) ||
+        f.audioTrack ||
+        f.ext === 'm4a' || f.ext === 'webm' || f.ext === 'mp3'
+    );
+
+    if (audioFormats.length === 0) return null;
+
+    const target = (targetTrackId || '').toLowerCase().trim();
+
+    // 1. Match by exact format_id
+    let matches = audioFormats.filter(f => f.format_id && String(f.format_id).toLowerCase() === target);
+
+    // 2. Match by exact language code (e.g. 'vi', 'en', 'es-419')
+    if (matches.length === 0 && target && target !== 'default') {
+        matches = audioFormats.filter(f => {
+            const lang = (f.language || (f.audioTrack && f.audioTrack.id ? f.audioTrack.id.split('.')[0] : '')).toLowerCase();
+            return lang === target || lang.startsWith(target + '-') || target.startsWith(lang + '-');
+        });
+    }
+
+    // 3. Match by format_note or displayName keywords
+    if (matches.length === 0 && target && target !== 'default') {
+        matches = audioFormats.filter(f => {
+            const note = (f.format_note || '').toLowerCase();
+            const name = (f.displayName || (f.audioTrack && f.audioTrack.displayName) || '').toLowerCase();
+            return note.includes(target) || name.includes(target);
+        });
+    }
+
+    // 4. Fallback to all audio formats if no exact match
+    const candidates = matches.length > 0 ? matches : audioFormats;
+
+    // Sort by quality: prefer progressive m4a/webm over m3u8, then higher bitrate
+    candidates.sort((a, b) => {
+        const aProgressive = (a.ext === 'm4a' || a.ext === 'webm' || (a.protocol && !a.protocol.includes('m3u8'))) ? 1 : 0;
+        const bProgressive = (b.ext === 'm4a' || b.ext === 'webm' || (b.protocol && !b.protocol.includes('m3u8'))) ? 1 : 0;
+        if (aProgressive !== bProgressive) return bProgressive - aProgressive;
+
+        const aBitrate = a.tbr || a.abr || a.bitrate || 0;
+        const bBitrate = b.tbr || b.abr || b.bitrate || 0;
+        return bBitrate - aBitrate;
+    });
+
+    return candidates[0];
 }
 
 /**
@@ -625,37 +691,77 @@ async function getAudioTracks(videoId) {
 }
 
 /**
- * Get direct stream URL for a specific track
+ * Get direct stream URL for a specific track with dynamic format matching and safe fallback
  */
 async function getAudioStreamUrl(videoId, trackId) {
+    if (!trackId || trackId === 'default') {
+        throw new Error('Default audio track is handled directly by YouTube Player');
+    }
+
     const cacheKey = `${videoId}_${trackId}`;
     const cached = streamUrlCache.get(cacheKey);
     if (cached && Date.now() < cached.expiresAt) {
         return cached.url;
     }
 
-    const tracks = await getAudioTracks(videoId);
-    const track = tracks.find(t => t.id === trackId || t.languageCode === trackId || t.formatId === trackId);
-    
-    if (!track) {
-        throw new Error(`Track ${trackId} not found for video ${videoId}`);
+    // Step 1: Ensure formats are loaded in memory
+    let rawFormats = null;
+    const cachedFormats = rawFormatsCache.get(videoId);
+    if (cachedFormats && (Date.now() - cachedFormats.timestamp < CACHE_TTL_MS)) {
+        rawFormats = cachedFormats.formats;
     }
 
-    // If track already has direct URL from yt-dlp dump
-    if (track.url) {
-        streamUrlCache.set(cacheKey, {
-            url: track.url,
-            expiresAt: Date.now() + (5 * 60 * 1000)
-        });
-        return track.url;
+    // If formats not in memory or missing, trigger full extraction
+    if (!rawFormats || rawFormats.length === 0) {
+        await getAudioTracksDetails(videoId);
+        const refetched = rawFormatsCache.get(videoId);
+        if (refetched) {
+            rawFormats = refetched.formats;
+        }
     }
 
-    // Extract direct URL via yt-dlp -g with cookies
+    // Step 2: If we have raw formats, find best matching format and its direct URL
+    if (rawFormats && rawFormats.length > 0) {
+        const bestFormat = findBestAudioFormat(rawFormats, trackId);
+        if (bestFormat && bestFormat.url) {
+            streamUrlCache.set(cacheKey, {
+                url: bestFormat.url,
+                expiresAt: Date.now() + (10 * 60 * 1000)
+            });
+            logAudio('info', `Resolved stream URL directly from format metadata`, {
+                videoId,
+                trackId,
+                formatId: bestFormat.format_id,
+                language: bestFormat.language,
+                ext: bestFormat.ext,
+                bitrate: bestFormat.tbr || bestFormat.abr
+            });
+            return bestFormat.url;
+        }
+    }
+
+    // Step 3: If direct URL is not present in metadata, query yt-dlp dynamically without hardcoded format IDs
     const ytDlp = getYtDlpPath();
     if (ytDlp) {
         return new Promise((resolve, reject) => {
-            const formatArg = track.formatId && track.formatId !== 'default' ? track.formatId : 'ba/b';
             const cookiePath = getCookiesFilePath();
+
+            // Construct dynamic format selector:
+            // e.g. "140-18/ba[language=vi]/ba/b"
+            const formatSelectors = [];
+            if (rawFormats && rawFormats.length > 0) {
+                const best = findBestAudioFormat(rawFormats, trackId);
+                if (best && best.format_id) {
+                    formatSelectors.push(best.format_id);
+                }
+            }
+            if (trackId && trackId !== 'default') {
+                formatSelectors.push(`ba[language=${trackId}]`);
+                formatSelectors.push(`ba[format_id*=${trackId}]`);
+            }
+            formatSelectors.push('ba/b');
+
+            const formatArg = formatSelectors.join('/');
 
             const args = [
                 '-g',
@@ -673,12 +779,19 @@ async function getAudioStreamUrl(videoId, trackId) {
 
             args.push(`https://www.youtube.com/watch?v=${videoId}`);
 
-            execFile(ytDlp, args, { timeout: 12000 }, (error, stdout, stderr) => {
+            logAudio('info', `Resolving stream URL via yt-dlp with dynamic format selector: ${formatArg}`, {
+                videoId,
+                trackId,
+                formatArg
+            });
+
+            execFile(ytDlp, args, { timeout: 15000 }, (error, stdout, stderr) => {
                 if (error || !stdout || !stdout.trim()) {
                     const errInfo = categorizeYouTubeError(error ? error.message : 'Empty stream output', stderr);
                     logAudio('warn', `Failed to resolve stream URL with yt-dlp: ${errInfo.code}`, {
                         videoId,
                         trackId,
+                        formatArg,
                         errorCode: errInfo.code,
                         stderr: stderr ? stderr.substring(0, 200) : null
                     });
@@ -688,14 +801,14 @@ async function getAudioStreamUrl(videoId, trackId) {
                 const url = stdout.trim().split('\n')[0];
                 streamUrlCache.set(cacheKey, {
                     url: url,
-                    expiresAt: Date.now() + (5 * 60 * 1000)
+                    expiresAt: Date.now() + (10 * 60 * 1000)
                 });
                 resolve(url);
             });
         });
     }
 
-    throw new Error('Unable to extract audio stream URL for track');
+    throw new Error('Unable to resolve audio stream URL');
 }
 
 /**
