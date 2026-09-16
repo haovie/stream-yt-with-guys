@@ -3,7 +3,6 @@ const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
 const cors = require('cors');
-const youtubeAudio = require('./youtubeAudio');
 
 const app = express();
 const server = http.createServer(app);
@@ -59,7 +58,6 @@ class ServerVideoStateManager {
                 lastUpdate: Date.now(),
                 playbackRate: 1,
                 videoId: null,
-                audioTrack: null,
                 lastController: null
             });
         }
@@ -110,173 +108,6 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ============================================================================
-// 🎵 YOUTUBE AUDIO TRACK API ENDPOINTS
-// ============================================================================
-
-// Xử lý Favicon tránh lỗi 404 trên browser
-app.get('/favicon.ico', (req, res) => res.status(204).end());
-
-// Lấy danh sách audio tracks của YouTube video
-app.get('/api/youtube/audio-tracks', async (req, res) => {
-  try {
-    const videoParam = req.query.url || req.query.videoId;
-    if (!videoParam) {
-      return res.status(400).json({
-        success: false,
-        error: 'Vui lòng cung cấp tham số "url" hoặc "videoId"',
-        code: youtubeAudio.ERROR_CODES.ERR_INVALID_YOUTUBE_URL
-      });
-    }
-
-    const data = await youtubeAudio.extractAudioTracks(videoParam);
-    res.json({
-      success: true,
-      ...data
-    });
-  } catch (err) {
-    console.warn(`[audio-tracks] Không thể trích xuất audio tracks cho "${req.query.videoId || req.query.url}": ${err.message}`);
-    // Trả về danh sách rỗng êm dịu thay vì 500 để client tự động dùng audio mặc định
-    res.json({
-      success: true,
-      videoId: req.query.videoId || null,
-      tracks: [],
-      tracksCount: 0,
-      defaultTrackId: 'default',
-      message: 'Chỉ có audio mặc định từ video gốc',
-      details: err.message
-    });
-  }
-});
-
-// Endpoint chẩn đoán hệ thống âm thanh YouTube
-app.get('/api/youtube/debug', async (req, res) => {
-  const { execFile } = require('child_process');
-  const videoId = req.query.videoId || 'Qtl8lJwbd4g';
-  const fs = require('fs');
-
-  const results = {
-    platform: process.platform,
-    user: process.env.USER || 'unknown',
-    envPath: process.env.PATH,
-    cookieFileExists: fs.existsSync(path.join(__dirname, 'cookies.txt'))
-  };
-
-  const checkCmd = (cmd, args) => new Promise(resolve => {
-    execFile(cmd, args, { timeout: 10000 }, (err, stdout, stderr) => {
-      resolve({
-        cmd: `${cmd} ${args.join(' ')}`,
-        success: !err,
-        code: err?.code,
-        stdout: stdout?.trim(),
-        stderr: stderr?.trim(),
-        error: err?.message
-      });
-    });
-  });
-
-  results.checks = [
-    await checkCmd('which', ['yt-dlp']),
-    await checkCmd('which', ['python3']),
-    await checkCmd('which', ['ffmpeg']),
-    await checkCmd('yt-dlp', ['--version'])
-  ];
-
-  try {
-    const { stdout } = await youtubeAudio.executeYtDlp([
-      '-J', '--skip-download', `https://www.youtube.com/watch?v=${videoId}`
-    ], { timeout: 35000 });
-    const info = JSON.parse(stdout);
-    const audioFormats = (info.formats || []).filter(f => (f.vcodec === 'none' || !f.vcodec) && (f.acodec && f.acodec !== 'none'));
-    results.videoExtraction = {
-      success: true,
-      title: info.title,
-      totalFormats: (info.formats || []).length,
-      audioFormatsCount: audioFormats.length,
-      sampleAudioLanguages: [...new Set(audioFormats.map(f => f.language || f.format_note))].slice(0, 10)
-    };
-  } catch (err) {
-    results.videoExtraction = {
-      success: false,
-      error: err.message,
-      stderr: err.stderr || err.details
-    };
-  }
-
-  res.json(results);
-});
-
-// Stream audio track độc lập (hỗ trợ HTTP Range requests)
-app.get('/api/youtube/audio-stream', async (req, res) => {
-  try {
-    const { videoId, url, itag, trackId, quality, language } = req.query;
-
-    if (url) {
-      return youtubeAudio.streamAudioTrack(url, req, res);
-    }
-
-    if (!videoId) {
-      return res.status(400).json({
-        error: 'Thiếu tham số videoId hoặc url để stream audio',
-        code: youtubeAudio.ERROR_CODES.ERR_INVALID_YOUTUBE_URL
-      });
-    }
-
-    let streamUrl = null;
-    let selectedTrack = null;
-
-    try {
-      const tracksData = await youtubeAudio.extractAudioTracks(videoId);
-      const selection = youtubeAudio.selectAudioTrack(tracksData.tracks, {
-        trackId,
-        itag,
-        quality,
-        language
-      });
-      selectedTrack = selection.selectedTrack;
-      if (selectedTrack && selectedTrack.url && !youtubeAudio.isStreamUrlExpired(selectedTrack.url)) {
-        streamUrl = selectedTrack.url;
-      }
-    } catch (e) {
-      // Nếu extract thất bại hoặc không có sẵn URL, tiếp tục resolve bên dưới
-    }
-
-    // Nếu chưa có direct URL (như các video đa ngôn ngữ MrBeast), phân giải qua resolveAudioStreamUrl
-    if (!streamUrl) {
-      streamUrl = await youtubeAudio.resolveAudioStreamUrl(videoId, {
-        trackId,
-        itag,
-        language,
-        selectedTrack
-      });
-    }
-
-    if (!streamUrl) {
-      return res.status(404).json({
-        error: 'Không tìm thấy URL audio stream phù hợp',
-        code: youtubeAudio.ERROR_CODES.ERR_NO_AUDIO_TRACKS
-      });
-    }
-
-    youtubeAudio.streamAudioTrack(streamUrl, req, res);
-  } catch (err) {
-    console.error('Lỗi stream audio:', err);
-    res.status(500).json({
-      error: err.message,
-      code: err.code || 'ERR_STREAM_FAILED'
-    });
-  }
-});
-
-// Ghép video và audio stream qua ffmpeg (nếu có yêu cầu kết hợp stream riêng)
-app.get('/api/youtube/merged-stream', (req, res) => {
-  const { videoUrl, audioUrl } = req.query;
-  if (!videoUrl || !audioUrl) {
-    return res.status(400).json({ error: 'Thiếu videoUrl hoặc audioUrl' });
-  }
-  youtubeAudio.mergeAudioVideoStreams(videoUrl, audioUrl, res);
-});
-
 // Socket.IO xử lý kết nối
 io.on('connection', (socket) => {
 
@@ -303,7 +134,6 @@ io.on('connection', (socket) => {
       rooms.set(roomId, {
         users: new Map(),
         currentVideo: null,
-        currentAudioTrack: null,
         videoState: {
           isPlaying: false,
           currentTime: 0,
@@ -333,8 +163,7 @@ io.on('connection', (socket) => {
     if (room.currentVideo) {
       socket.emit('video-loaded', {
         videoId: room.currentVideo,
-        state: room.videoState,
-        audioTrack: room.currentAudioTrack
+        state: room.videoState
       });
     }
 
@@ -354,8 +183,7 @@ io.on('connection', (socket) => {
     if (currentState && currentState.videoId) {
       socket.emit('video-loaded', {
         videoId: currentState.videoId,
-        state: currentState,
-        audioTrack: room.currentAudioTrack || currentState.audioTrack
+        state: currentState
       });
     }
     
@@ -364,8 +192,7 @@ io.on('connection', (socket) => {
       isAdmin: socket.isAdmin,
       adminId: room.adminId,
       isLiveMode: room.isLiveMode,
-      videoQueue: room.videoQueue,
-      currentAudioTrack: room.currentAudioTrack
+      videoQueue: room.videoQueue
     });
 
     // Gửi danh sách người dùng online
@@ -476,7 +303,6 @@ io.on('connection', (socket) => {
       if (socket.isAdmin && room.adminId === socket.id) {
         // Admin có thể phát ngay lập tức
         room.currentVideo = videoId;
-        room.currentAudioTrack = null;
         room.videoState = {
           isPlaying: false,
           currentTime: 0,
@@ -531,7 +357,6 @@ io.on('connection', (socket) => {
         
         // Phát video từ queue
         room.currentVideo = queueItem.videoId;
-        room.currentAudioTrack = null;
         room.videoState = {
           isPlaying: false,
           currentTime: 0,
@@ -718,42 +543,6 @@ io.on('connection', (socket) => {
     const { roomId } = data;
     if (roomId) {
       socket.to(roomId).emit('playback-speed-change', data);
-    }
-  });
-
-  // Đồng bộ thay đổi audio track
-  socket.on('audio-track-change', (data) => {
-    const { roomId, trackId, itag, language, displayName, codec, bitrateKbps } = data;
-    const room = rooms.get(roomId);
-    if (!room) return;
-
-    // Trong live mode, chỉ admin mới đổi được cho cả phòng
-    const canControl = !room.isLiveMode || (socket.isAdmin && room.adminId === socket.id);
-    
-    if (canControl) {
-      const audioTrackData = {
-        trackId: trackId || 'default',
-        itag: itag || null,
-        language: language || null,
-        displayName: displayName || 'Mặc định',
-        codec: codec || null,
-        bitrateKbps: bitrateKbps || null,
-        selectedBy: socket.username,
-        timestamp: getFormattedTime()
-      };
-
-      room.currentAudioTrack = audioTrackData;
-      serverStateManager.updateState(roomId, { audioTrack: audioTrackData }, socket.id);
-
-      // Thông báo cho tất cả users trong phòng
-      io.to(roomId).emit('audio-track-changed', audioTrackData);
-
-      io.to(roomId).emit('chat-message', {
-        username: 'Hệ thống',
-        message: `🎵 ${socket.isAdmin ? '👑 Admin ' : ''}${socket.username} đã chọn audio track: ${audioTrackData.displayName}`,
-        timestamp: getFormattedTime(),
-        isSystem: true
-      });
     }
   });
 
