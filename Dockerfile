@@ -1,6 +1,10 @@
 # Sử dụng Node.js 18 Alpine image (nhẹ và bảo mật)
 FROM node:18-alpine
 
+# Cài đặt Python3, pip, ffmpeg và yt-dlp cho xử lý stream audio
+RUN apk add --no-cache python3 py3-pip ffmpeg && \
+    pip install --no-cache-dir yt-dlp --break-system-packages
+
 # Đặt thư mục làm việc
 WORKDIR /app
 

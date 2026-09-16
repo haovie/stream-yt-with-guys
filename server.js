@@ -114,6 +114,9 @@ app.get('/', (req, res) => {
 // 🎵 YOUTUBE AUDIO TRACK API ENDPOINTS
 // ============================================================================
 
+// Xử lý Favicon tránh lỗi 404 trên browser
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
 // Lấy danh sách audio tracks của YouTube video
 app.get('/api/youtube/audio-tracks', async (req, res) => {
   try {
@@ -132,12 +135,15 @@ app.get('/api/youtube/audio-tracks', async (req, res) => {
       ...data
     });
   } catch (err) {
-    const statusCode = err instanceof youtubeAudio.YouTubeAudioError && err.code === youtubeAudio.ERROR_CODES.ERR_INVALID_YOUTUBE_URL ? 400 : 500;
-    res.status(statusCode).json({
-      success: false,
-      error: err.message,
-      code: err.code || 'ERR_INTERNAL',
-      details: err.details || null
+    console.warn(`[audio-tracks] Không thể trích xuất audio tracks cho "${req.query.videoId || req.query.url}": ${err.message}`);
+    // Trả về danh sách rỗng êm dịu thay vì 500 để client tự động dùng audio mặc định
+    res.json({
+      success: true,
+      videoId: req.query.videoId || null,
+      tracks: [],
+      tracksCount: 0,
+      defaultTrackId: 'default',
+      message: 'Chỉ có audio mặc định từ video gốc'
     });
   }
 });

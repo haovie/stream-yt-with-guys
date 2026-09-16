@@ -402,6 +402,110 @@ function fetchFromWatchPage(videoId) {
 }
 
 /**
+ * Strategy C: Sử dụng yt-dlp để trích xuất danh sách audio track (đặc biệt hiệu quả trên cloud VPS/AWS)
+ */
+function extractViaYtDlp(videoId) {
+  return new Promise((resolve, reject) => {
+    const { execFile } = require('child_process');
+    const args = ['-m', 'yt_dlp', '-J', '--skip-download', `https://www.youtube.com/watch?v=${videoId}`];
+    execFile('python3', args, { maxBuffer: 25 * 1024 * 1024, timeout: 25000 }, (err, stdout) => {
+      if (err || !stdout) {
+        return reject(err || new Error('yt-dlp output empty'));
+      }
+      try {
+        const info = JSON.parse(stdout);
+        const rawFormats = (info.formats || []).filter(f => f.vcodec === 'none' && f.acodec !== 'none');
+        if (!rawFormats.length) {
+          return reject(new YouTubeAudioError(ERROR_CODES.ERR_NO_AUDIO_TRACKS, 'Không tìm thấy audio formats'));
+        }
+
+        const tracks = [];
+        for (let i = 0; i < rawFormats.length; i++) {
+          const f = rawFormats[i];
+          const itag = parseInt(f.format_id.split('-')[0], 10) || 140;
+          const mimeType = f.mimeType || `audio/${f.ext || 'webm'}; codecs="${f.acodec}"`;
+          const codec = f.acodec || (f.ext === 'webm' ? 'opus' : 'mp4a.40.2');
+          const bitrate = f.tbr ? Math.round(f.tbr * 1000) : (f.abr ? Math.round(f.abr * 1000) : 128000);
+          const bitrateKbps = Math.round(bitrate / 1000);
+          const lang = f.language || (f.format_note && f.format_note.includes('original') ? 'en' : null);
+          const langName = f.format_note || lang;
+          const isDefault = Boolean(f.format_note && f.format_note.includes('default')) || (i === 0);
+
+          let displayName = langName;
+          if (!displayName) {
+            const qualityLabel = bitrateKbps >= 128 ? 'Cao' : (bitrateKbps >= 64 ? 'Trung bình' : 'Tiết kiệm');
+            displayName = `${qualityLabel} • ${bitrateKbps} kbps (${codec})`;
+          } else {
+            displayName = `${langName} (${bitrateKbps} kbps, ${codec})`;
+          }
+
+          const trackId = `${itag}-${lang || i}`;
+          tracks.push({
+            id: trackId,
+            itag: itag,
+            bitrate: bitrate,
+            bitrateKbps: bitrateKbps,
+            codec: codec,
+            mimeType: mimeType,
+            container: f.ext || 'webm',
+            audioSampleRate: f.asr || 48000,
+            audioChannels: f.audio_channels || 2,
+            audioQuality: bitrateKbps >= 128 ? 'AUDIO_QUALITY_MEDIUM' : 'AUDIO_QUALITY_LOW',
+            language: lang,
+            languageName: langName,
+            displayName: displayName,
+            isDefault: isDefault,
+            url: f.url && f.url.startsWith('http') ? f.url : null,
+            contentLength: f.filesize || f.filesize_approx || null,
+            approxDurationMs: info.duration ? Math.round(info.duration * 1000) : null,
+            expiresAt: f.url ? extractExpiration(f.url) : null,
+            isExpired: Boolean(f.url && isStreamUrlExpired(f.url))
+          });
+        }
+
+        const hasMultiAudio = tracks.some(t => t.languageName || t.language);
+        let displayTracks = tracks;
+        if (hasMultiAudio) {
+          const langMap = new Map();
+          for (const t of tracks) {
+            const key = t.language || t.languageName || 'default';
+            if (!langMap.has(key)) {
+              langMap.set(key, t);
+            } else {
+              const existing = langMap.get(key);
+              if (t.isDefault && !existing.isDefault) {
+                langMap.set(key, t);
+              } else if (t.bitrate > existing.bitrate && (!existing.isDefault || t.isDefault)) {
+                langMap.set(key, t);
+              }
+            }
+          }
+          displayTracks = Array.from(langMap.values());
+          displayTracks.sort((a, b) => {
+            if (a.isDefault && !b.isDefault) return -1;
+            if (!a.isDefault && b.isDefault) return 1;
+            return (a.displayName || '').localeCompare(b.displayName || '');
+          });
+        }
+
+        resolve({
+          videoId: videoId,
+          title: info.title || null,
+          author: info.uploader || info.channel || null,
+          durationSeconds: info.duration || null,
+          defaultTrackId: (displayTracks.find(t => t.isDefault) || displayTracks[0]).id,
+          tracksCount: displayTracks.length,
+          tracks: displayTracks,
+          allFormats: tracks
+        });
+      } catch (e) {
+        reject(e);
+      }
+    });
+  });
+}
+
+/**
  * Trích xuất danh sách audio track từ YouTube URL hoặc Video ID
  */
 async function extractAudioTracks(urlOrId) {
@@ -443,19 +547,18 @@ async function extractAudioTracks(urlOrId) {
         return result;
       }
     }
-    if (watchPageData && watchPageData.playabilityStatus?.status !== 'OK') {
-      throw new YouTubeAudioError(
-        ERROR_CODES.ERR_NO_AUDIO_TRACKS,
-        `Trạng thái phát lại không khả dụng: ${watchPageData.playabilityStatus?.status} (${watchPageData.playabilityStatus?.reason || 'Không rõ nguyên nhân'})`,
-        { status: watchPageData.playabilityStatus?.status, reason: watchPageData.playabilityStatus?.reason }
-      );
+  } catch (err) {
+    // Watch page scraper bị hạn chế trên một số IP Cloud
+  }
+
+  // Strategy C: Fallback qua yt-dlp (đặc biệt tin cậy trên Server / Cloud IP)
+  try {
+    const ytDlpResult = await extractViaYtDlp(videoId);
+    if (ytDlpResult && ytDlpResult.tracks && ytDlpResult.tracks.length > 0) {
+      return ytDlpResult;
     }
   } catch (err) {
-    if (err instanceof YouTubeAudioError) throw err;
-    throw new YouTubeAudioError(
-      ERROR_CODES.ERR_NO_AUDIO_TRACKS,
-      `Không thể trích xuất audio tracks cho video ID: ${videoId} (${err.message})`
-    );
+    // yt-dlp thất bại
   }
 
   throw new YouTubeAudioError(
