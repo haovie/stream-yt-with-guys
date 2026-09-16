@@ -103,9 +103,54 @@ class ServerVideoStateManager {
 
 const serverStateManager = new ServerVideoStateManager();
 
+const youtubeAudio = require('./youtubeAudio');
+
 // Route chính
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// ============================================================================
+// 🎵 YOUTUBE AUDIO TRACKS API
+// ============================================================================
+app.get('/api/youtube/audio-tracks/:videoId', async (req, res) => {
+  try {
+    const { videoId } = req.params;
+    if (!videoId) {
+      return res.status(400).json({ success: false, error: 'Video ID is required' });
+    }
+    const tracks = await youtubeAudio.getAudioTracks(videoId);
+    res.json({
+      success: true,
+      videoId: videoId,
+      tracks: tracks
+    });
+  } catch (err) {
+    console.error('[API] Error getting audio tracks:', err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      tracks: [{
+        id: 'default',
+        formatId: 'default',
+        displayName: 'Mặc định (YouTube Player)',
+        languageCode: 'default',
+        languageName: 'Mặc định',
+        isDefault: true,
+        isDubbed: false,
+        audioQuality: 'auto'
+      }]
+    });
+  }
+});
+
+app.get('/api/youtube/audio-stream/:videoId', async (req, res) => {
+  const { videoId } = req.params;
+  const trackId = req.query.trackId || req.query.formatId;
+  if (!trackId || trackId === 'default') {
+    return res.status(400).json({ error: 'Default audio track is handled directly by YouTube Player' });
+  }
+  await youtubeAudio.streamAudioTrack(req, res, videoId, trackId);
 });
 
 // Socket.IO xử lý kết nối
@@ -192,7 +237,8 @@ io.on('connection', (socket) => {
       isAdmin: socket.isAdmin,
       adminId: room.adminId,
       isLiveMode: room.isLiveMode,
-      videoQueue: room.videoQueue
+      videoQueue: room.videoQueue,
+      currentAudioTrack: room.currentAudioTrack || 'default'
     });
 
     // Gửi danh sách người dùng online
@@ -535,6 +581,18 @@ io.on('connection', (socket) => {
     const { roomId } = data;
     if (roomId) {
       socket.to(roomId).emit('caption-change', data);
+    }
+  });
+
+  // Đồng bộ thay đổi audio track (YouTube Multi-track Audio)
+  socket.on('audio-track-change', (data) => {
+    const { roomId, trackId, trackName } = data;
+    if (roomId) {
+      const room = rooms.get(roomId);
+      if (room) {
+        room.currentAudioTrack = trackId;
+      }
+      socket.to(roomId).emit('audio-track-change', data);
     }
   });
 
