@@ -1,9 +1,9 @@
 # Sử dụng Node.js 18 Alpine image (nhẹ và bảo mật)
 FROM node:18-alpine
 
-# Cài đặt Python3, pip, ffmpeg và yt-dlp cho xử lý stream audio
-RUN apk add --no-cache python3 py3-pip ffmpeg && \
-    pip install --no-cache-dir yt-dlp --break-system-packages
+# Cài đặt Python3, pip, ffmpeg, curl và yt-dlp cho xử lý stream audio
+RUN apk add --no-cache python3 py3-pip ffmpeg curl ca-certificates && \
+    (pip install --no-cache-dir -U yt-dlp --break-system-packages || pip install --no-cache-dir -U yt-dlp || apk add --no-cache yt-dlp)
 
 # Đặt thư mục làm việc
 WORKDIR /app
@@ -17,12 +17,12 @@ RUN npm ci --only=production && npm cache clean --force
 # Copy source code
 COPY . .
 
-# Tạo user không có quyền root để chạy ứng dụng (bảo mật)
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S nodejs -u 1001
+# Tạo user nodejs kèm home directory hợp lệ và cấp quyền cho thư mục cache
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S -h /home/nodejs -u 1001 -G nodejs nodejs && \
+    mkdir -p /home/nodejs/.cache /app && \
+    chown -R nodejs:nodejs /home/nodejs /app
 
-# Chuyển quyền sở hữu thư mục cho user nodejs
-RUN chown -R nodejs:nodejs /app
 USER nodejs
 
 # Expose port

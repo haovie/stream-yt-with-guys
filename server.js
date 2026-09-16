@@ -143,7 +143,8 @@ app.get('/api/youtube/audio-tracks', async (req, res) => {
       tracks: [],
       tracksCount: 0,
       defaultTrackId: 'default',
-      message: 'Chỉ có audio mặc định từ video gốc'
+      message: 'Chỉ có audio mặc định từ video gốc',
+      details: err.message
     });
   }
 });
