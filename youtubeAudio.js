@@ -1,6 +1,6 @@
 const https = require('https');
 const http = require('http');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -529,9 +529,27 @@ function extractTracksWithYtDlp(videoId) {
 
         args.push(`https://www.youtube.com/watch?v=${videoId}`);
 
-        execFile(ytDlp, args, { maxBuffer: 25 * 1024 * 1024, timeout: 15000 }, (error, stdout, stderr) => {
-            if (error || !stdout) {
-                const errorInfo = categorizeYouTubeError(error ? error.message : 'No output', stderr);
+        const child = spawn(ytDlp, args);
+        let stdout = '';
+        let stderr = '';
+        let timer = setTimeout(() => {
+            try { child.kill('SIGKILL'); } catch (e) {}
+        }, 25000);
+
+        child.stdout.on('data', chunk => { stdout += chunk; });
+        child.stderr.on('data', chunk => { stderr += chunk; });
+
+        child.on('error', (err) => {
+            clearTimeout(timer);
+            const errorInfo = categorizeYouTubeError(err.message, stderr);
+            logAudio('warn', `yt-dlp spawn error: ${errorInfo.code} - ${errorInfo.message}`, { videoId, errorCode: errorInfo.code, hasCookies });
+            resolve({ tracks: null, error: errorInfo });
+        });
+
+        child.on('close', (code) => {
+            clearTimeout(timer);
+            if (code !== 0 || !stdout) {
+                const errorInfo = categorizeYouTubeError(code === null ? 'Timeout' : `yt-dlp exit ${code}`, stderr);
                 logAudio('warn', `yt-dlp extraction failed: ${errorInfo.code} - ${errorInfo.message}`, { 
                     videoId, 
                     errorCode: errorInfo.code,
@@ -888,9 +906,33 @@ async function getAudioStreamUrl(videoId, trackId) {
                 formatArg
             });
 
-            execFile(ytDlp, args, { timeout: 15000 }, (error, stdout, stderr) => {
-                if (error || !stdout || !stdout.trim()) {
-                    const errInfo = categorizeYouTubeError(error ? error.message : 'Empty stream output', stderr);
+            const child = spawn(ytDlp, args);
+            let stdout = '';
+            let stderr = '';
+            let timer = setTimeout(() => {
+                try { child.kill('SIGKILL'); } catch (e) {}
+            }, 20000);
+
+            child.stdout.on('data', chunk => { stdout += chunk; });
+            child.stderr.on('data', chunk => { stderr += chunk; });
+
+            child.on('error', (err) => {
+                clearTimeout(timer);
+                const errInfo = categorizeYouTubeError(err.message, stderr);
+                logAudio('warn', `Failed to resolve stream URL with yt-dlp: ${errInfo.code}`, {
+                    videoId,
+                    trackId,
+                    formatArg,
+                    errorCode: errInfo.code,
+                    stderr: stderr ? stderr.substring(0, 200) : null
+                });
+                reject(new Error(errInfo.message));
+            });
+
+            child.on('close', (code) => {
+                clearTimeout(timer);
+                if (code !== 0 || !stdout || !stdout.trim()) {
+                    const errInfo = categorizeYouTubeError(code === null ? 'Timeout' : `yt-dlp exit ${code}`, stderr);
                     logAudio('warn', `Failed to resolve stream URL with yt-dlp: ${errInfo.code}`, {
                         videoId,
                         trackId,
