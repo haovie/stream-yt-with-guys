@@ -537,9 +537,6 @@ const qualityBtn = document.getElementById('quality-btn');
 const qualityMenu = document.getElementById('quality-menu');
 const captionBtn = document.getElementById('caption-btn');
 const captionMenu = document.getElementById('caption-menu');
-const audioTrackBtn = document.getElementById('audio-track-btn');
-const audioTrackMenu = document.getElementById('audio-track-menu');
-const customAudioTrack = document.getElementById('custom-audio-track');
 
 // Custom controls state
 let controlsTimeout = null;
@@ -552,14 +549,6 @@ let currentCaptionTrack = null;
 let currentCaptionLangCode = null; // Store language code to maintain preference across videos
 let availableCaptions = [];
 let availableQualities = [];
-
-// Audio track state
-let currentAudioTrack = 'default';
-let currentAudioLangCode = null;
-let availableAudioTracks = [];
-let hlsAudioInstance = null;
-let currentLoadedVideoId = null;
-let audioDriftCheckInterval = null;
 
 // New elements for enhanced features
 const emojiBtn = document.getElementById('emoji-btn');
@@ -891,16 +880,6 @@ function setupSocketListeners() {
             }
         }
     });
-
-    // 🎵 Audio Track change socket listener
-    socket.on('audio-track-change', (data) => {
-        if (!isAdmin) {
-            const trackId = data.trackId || 'default';
-            setAudioTrack(trackId, false);
-            const trackTitle = data.trackName || (trackId === 'default' ? 'Mặc định (YouTube)' : trackId);
-            displaySystemMessage(`Admin đổi track âm thanh: ${trackTitle}`);
-        }
-    });
     
     // User count and list
     socket.on('user-count', (count) => {
@@ -936,12 +915,6 @@ function setupSocketListeners() {
         
         // 🎮 Update live mode UI (hide play/pause/rewind/forward for users)
         updateLiveModeUI();
-
-        if (data.currentAudioTrack && data.currentAudioTrack !== 'default') {
-            setTimeout(() => {
-                setAudioTrack(data.currentAudioTrack, false);
-            }, 1500);
-        }
         
         const userPrefix = isAdmin ? '👑 Admin' : '';
         currentUserDisplay.textContent = `${userPrefix} ${currentUser}`;
@@ -1483,9 +1456,6 @@ function handleLoadVideo() {
         return;
     }
     
-    currentLoadedVideoId = videoId;
-    loadAvailableAudioTracks(videoId);
-    
     // Get video title (simplified)
     const videoTitle = getVideoTitleFromUrl(url);
     
@@ -1619,21 +1589,12 @@ function initializeCustomControls() {
             });
         }
     }
-
-    // Audio track control
-    if (audioTrackBtn) {
-        audioTrackBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            toggleAudioTrackMenu();
-        });
-    }
     
     // Close menus when clicking outside
     document.addEventListener('click', (e) => {
         if (!e.target.closest('.speed-control') && 
             !e.target.closest('.quality-control') && 
-            !e.target.closest('.caption-control') &&
-            !e.target.closest('.audio-track-control')) {
+            !e.target.closest('.caption-control')) {
             closeAllMenus();
         }
     });
@@ -1707,22 +1668,14 @@ function seekRelative(seconds) {
 function toggleMute() {
     if (!player || !isPlayerReady) return;
     
-    if (player.isMuted() || (currentAudioTrack !== 'default' && customAudioTrack && customAudioTrack.muted)) {
-        if (currentAudioTrack === 'default') {
-            player.unMute();
-            player.setVolume(lastVolume);
-        } else if (customAudioTrack) {
-            customAudioTrack.muted = false;
-        }
+    if (player.isMuted()) {
+        player.unMute();
+        player.setVolume(lastVolume);
         updateVolumeIcon(lastVolume);
         if (volumeSlider) volumeSlider.value = lastVolume;
     } else {
-        lastVolume = currentAudioTrack === 'default' ? player.getVolume() : (parseInt(volumeSlider.value) || 100);
-        if (currentAudioTrack === 'default') {
-            player.mute();
-        } else if (customAudioTrack) {
-            customAudioTrack.muted = true;
-        }
+        lastVolume = player.getVolume();
+        player.mute();
         updateVolumeIcon(0);
         if (volumeSlider) volumeSlider.value = 0;
     }
@@ -1733,24 +1686,13 @@ function handleVolumeChange(e) {
     if (!player || !isPlayerReady) return;
     
     const volume = parseInt(e.target.value);
+    player.setVolume(volume);
     
-    if (currentAudioTrack === 'default') {
-        player.setVolume(volume);
-        if (volume === 0) {
-            player.mute();
-        } else {
-            player.unMute();
-            lastVolume = volume;
-        }
+    if (volume === 0) {
+        player.mute();
     } else {
-        // Custom audio track volume control
-        if (customAudioTrack) {
-            customAudioTrack.volume = volume / 100;
-            customAudioTrack.muted = (volume === 0);
-        }
-        if (volume > 0) {
-            lastVolume = volume;
-        }
+        player.unMute();
+        lastVolume = volume;
     }
     
     updateVolumeIcon(volume);
@@ -2203,11 +2145,6 @@ function setPlaybackSpeed(speed) {
                     opt.classList.remove('active');
                 }
             });
-        }
-
-        // Sync custom audio track playback speed
-        if (customAudioTrack) {
-            customAudioTrack.playbackRate = speed;
         }
         
         // Emit to other users if admin
@@ -2756,306 +2693,7 @@ function closeAllMenus() {
     if (speedMenu) speedMenu.classList.remove('visible');
     if (qualityMenu) qualityMenu.classList.remove('visible');
     if (captionMenu) captionMenu.classList.remove('visible');
-    if (audioTrackMenu) audioTrackMenu.classList.remove('visible');
 }
-
-// 🎵 ============================================================================
-// 🎵 YOUTUBE AUDIO TRACKS CONTROLLER
-// 🎵 ============================================================================
-
-// Toggle Audio Track Menu
-function toggleAudioTrackMenu() {
-    if (!audioTrackMenu) return;
-    
-    // Close other menus
-    if (speedMenu) speedMenu.classList.remove('visible');
-    if (qualityMenu) qualityMenu.classList.remove('visible');
-    if (captionMenu) captionMenu.classList.remove('visible');
-    
-    const willOpen = !audioTrackMenu.classList.contains('visible');
-    audioTrackMenu.classList.toggle('visible');
-
-    // If opening and tracks are empty, try loading them
-    if (willOpen && availableAudioTracks.length <= 1 && currentLoadedVideoId) {
-        loadAvailableAudioTracks(currentLoadedVideoId);
-    }
-}
-
-// Show loading state in Audio Track Menu
-function showAudioTrackLoading() {
-    if (!audioTrackMenu) return;
-    audioTrackMenu.innerHTML = '';
-    const loadingOption = document.createElement('div');
-    loadingOption.className = 'audio-track-option audio-track-loading';
-    loadingOption.style.cssText = 'opacity: 0.7; cursor: wait; pointer-events: none;';
-    loadingOption.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Đang tải track âm thanh...';
-    audioTrackMenu.appendChild(loadingOption);
-}
-
-// Build empty/fallback menu when no additional tracks are available
-function buildNoAudioTracksMenu() {
-    if (!audioTrackMenu) return;
-    audioTrackMenu.innerHTML = '';
-
-    const defaultOption = document.createElement('div');
-    defaultOption.className = 'audio-track-option active';
-    defaultOption.dataset.track = 'default';
-    defaultOption.innerHTML = '<i class="fas fa-volume-up"></i> Mặc định (YouTube)';
-    defaultOption.addEventListener('click', () => {
-        setAudioTrack('default');
-        toggleAudioTrackMenu();
-    });
-    audioTrackMenu.appendChild(defaultOption);
-
-    if (audioTrackBtn) {
-        audioTrackBtn.classList.remove('active');
-        audioTrackBtn.title = 'Âm thanh: Video chỉ có track mặc định';
-    }
-}
-
-// Load available audio tracks from server for a YouTube Video
-async function loadAvailableAudioTracks(videoId) {
-    if (!videoId) return;
-    currentLoadedVideoId = videoId;
-    showAudioTrackLoading();
-
-    try {
-        const response = await fetch(`/api/youtube/audio-tracks/${encodeURIComponent(videoId)}`);
-        if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}`);
-        }
-        const data = await response.json();
-        
-        if (data.success && Array.isArray(data.tracks) && data.tracks.length > 0) {
-            availableAudioTracks = data.tracks;
-            buildAudioTrackMenu(data.tracks);
-        } else {
-            availableAudioTracks = [];
-            buildNoAudioTracksMenu();
-        }
-    } catch (err) {
-        console.warn('[YouTubeAudio] Could not fetch audio tracks:', err.message);
-        availableAudioTracks = [];
-        buildNoAudioTracksMenu();
-    }
-}
-
-// Build audio track menu UI
-function buildAudioTrackMenu(tracks) {
-    if (!audioTrackMenu) return;
-    audioTrackMenu.innerHTML = '';
-
-    if (audioTrackBtn) {
-        audioTrackBtn.title = 'Chọn ngôn ngữ âm thanh / Audio Track';
-    }
-
-    tracks.forEach((track) => {
-        const option = document.createElement('div');
-        option.className = 'audio-track-option';
-        option.dataset.track = track.id;
-
-        if (track.id === currentAudioTrack) {
-            option.classList.add('active');
-        }
-
-        const iconClass = track.id === 'default' ? 'fa-volume-up' : (track.isDubbed ? 'fa-language' : 'fa-headphones');
-        option.innerHTML = `<i class="fas ${iconClass}"></i> <span>${escapeHtml(track.displayName || track.id)}</span>`;
-
-        option.addEventListener('click', () => {
-            setAudioTrack(track.id);
-            toggleAudioTrackMenu();
-        });
-
-        audioTrackMenu.appendChild(option);
-    });
-
-    // Ensure active state on button is updated
-    if (audioTrackBtn) {
-        if (currentAudioTrack && currentAudioTrack !== 'default') {
-            audioTrackBtn.classList.add('active');
-        } else {
-            audioTrackBtn.classList.remove('active');
-        }
-    }
-}
-
-// Set active audio track (Default YouTube or Custom Audio Stream)
-function setAudioTrack(trackId, shouldEmit = true) {
-    trackId = trackId || 'default';
-    
-    // Clean up active states in menu
-    if (audioTrackMenu) {
-        const options = audioTrackMenu.querySelectorAll('.audio-track-option');
-        options.forEach(opt => {
-            if (opt.dataset.track === trackId) {
-                opt.classList.add('active');
-            } else {
-                opt.classList.remove('active');
-            }
-        });
-    }
-
-    if (trackId === 'default') {
-        // Switch to native YouTube player audio
-        if (hlsAudioInstance) {
-            hlsAudioInstance.destroy();
-            hlsAudioInstance = null;
-        }
-
-        if (customAudioTrack) {
-            customAudioTrack.pause();
-            customAudioTrack.removeAttribute('src');
-            customAudioTrack.load();
-        }
-
-        if (player && isPlayerReady) {
-            try {
-                player.unMute();
-                player.setVolume(lastVolume || 100);
-            } catch (e) {}
-        }
-
-        currentAudioTrack = 'default';
-        currentAudioLangCode = null;
-
-        if (audioTrackBtn) {
-            audioTrackBtn.classList.remove('active');
-        }
-
-        if (shouldEmit) {
-            displaySystemMessage('Âm thanh: Mặc định (YouTube Player)');
-        }
-
-    } else {
-        // Switch to custom audio track
-        const track = availableAudioTracks.find(t => t.id === trackId || t.formatId === trackId);
-        const displayName = track ? (track.displayName || track.id) : trackId;
-
-        currentAudioTrack = trackId;
-        currentAudioLangCode = track ? track.languageCode : null;
-
-        // Mute YouTube player so only custom audio plays
-        if (player && isPlayerReady) {
-            try {
-                player.mute();
-            } catch (e) {}
-        }
-
-        if (audioTrackBtn) {
-            audioTrackBtn.classList.add('active');
-        }
-
-        if (customAudioTrack) {
-            const streamUrl = `/api/youtube/audio-stream/${currentLoadedVideoId}?trackId=${encodeURIComponent(trackId)}`;
-            
-            if (hlsAudioInstance) {
-                hlsAudioInstance.destroy();
-                hlsAudioInstance = null;
-            }
-
-            customAudioTrack.src = streamUrl;
-            customAudioTrack.load();
-
-            // Sync playback position, speed, and volume
-            const playerCurrentTime = (player && isPlayerReady) ? player.getCurrentTime() : 0;
-            const playerPlaybackRate = (player && isPlayerReady) ? (player.getPlaybackRate() || 1) : 1;
-            const currentVol = volumeSlider ? parseInt(volumeSlider.value) : 100;
-
-            customAudioTrack.currentTime = playerCurrentTime;
-            customAudioTrack.playbackRate = playerPlaybackRate;
-            customAudioTrack.volume = currentVol / 100;
-
-            // Play if video player is currently playing
-            if (player && isPlayerReady && player.getPlayerState() === YT.PlayerState.PLAYING) {
-                customAudioTrack.play().catch((e) => {
-                    console.warn('[YouTubeAudio] Audio play prevented by browser:', e.message);
-                });
-            }
-
-            // Set fallback error handler
-            customAudioTrack.onerror = (e) => {
-                console.warn('[YouTubeAudio] Audio element playback error, falling back to default:', e);
-                fallbackToDefaultAudio();
-            };
-        }
-
-        if (shouldEmit) {
-            displaySystemMessage(`Âm thanh: Đã chọn ${displayName}`);
-        }
-    }
-
-    // Emit to other users if Admin
-    if (shouldEmit && isAdmin && socket) {
-        const activeTrack = availableAudioTracks.find(t => t.id === trackId || t.formatId === trackId);
-        socket.emit('audio-track-change', {
-            roomId: currentRoom,
-            trackId: trackId,
-            langCode: currentAudioLangCode,
-            trackName: activeTrack ? (activeTrack.displayName || activeTrack.id) : (trackId === 'default' ? 'Mặc định' : trackId)
-        });
-    }
-}
-
-// Fallback to default YouTube audio on error
-function fallbackToDefaultAudio() {
-    displaySystemMessage('⚠️ Không thể tải track âm thanh phụ, đã chuyển về âm thanh YouTube mặc định.');
-    setAudioTrack('default', false);
-}
-
-// Synchronize custom audio element with YouTube Player events
-function syncCustomAudioWithPlayer(playerState, targetTime) {
-    if (!customAudioTrack || currentAudioTrack === 'default') return;
-
-    try {
-        if (targetTime !== undefined && Math.abs(customAudioTrack.currentTime - targetTime) > 0.25) {
-            customAudioTrack.currentTime = targetTime;
-        }
-
-        if (player && isPlayerReady) {
-            customAudioTrack.playbackRate = player.getPlaybackRate() || 1;
-        }
-
-        if (playerState === YT.PlayerState.PLAYING) {
-            if (customAudioTrack.paused) {
-                customAudioTrack.play().catch(console.warn);
-            }
-        } else if (playerState === YT.PlayerState.PAUSED || 
-                   playerState === YT.PlayerState.BUFFERING || 
-                   playerState === YT.PlayerState.ENDED) {
-            if (!customAudioTrack.paused) {
-                customAudioTrack.pause();
-            }
-        }
-    } catch (e) {
-        console.warn('[YouTubeAudio] Error syncing audio:', e);
-    }
-}
-
-// Initialize continuous audio drift correction
-function initAudioDriftCorrection() {
-    if (audioDriftCheckInterval) {
-        clearInterval(audioDriftCheckInterval);
-    }
-    audioDriftCheckInterval = setInterval(() => {
-        if (!player || !isPlayerReady || !customAudioTrack || currentAudioTrack === 'default') {
-            return;
-        }
-        try {
-            if (player.getPlayerState() === YT.PlayerState.PLAYING) {
-                const playerTime = player.getCurrentTime();
-                const audioTime = customAudioTrack.currentTime;
-                const drift = Math.abs(playerTime - audioTime);
-                if (drift > 0.35) {
-                    customAudioTrack.currentTime = playerTime;
-                }
-                if (customAudioTrack.paused) {
-                    customAudioTrack.play().catch(() => {});
-                }
-            }
-        } catch (e) {}
-    }, 1500);
-}
-initAudioDriftCorrection();
 
 // 🎮 Update Live Mode UI
 function updateLiveModeUI() {
@@ -3070,16 +2708,13 @@ function updateLiveModeUI() {
 function loadYouTubeVideo(videoId) {
     if (!videoId) return;
     
-    currentLoadedVideoId = videoId;
     videoPlaceholder.style.display = 'none';
     
-    // Reset states for new video
+    // Reset states for new video (but keep currentCaptionTrack to remember user preference)
     availableCaptions = [];
+    // Don't reset currentCaptionTrack - we want to keep the user's caption preference
     availableQualities = [];
     currentQuality = 'auto';
-    
-    // 🎵 Always trigger loading audio tracks for new video
-    loadAvailableAudioTracks(videoId);
     
     // Reset video title while loading
     if (videoTitle) {
@@ -3101,9 +2736,6 @@ function loadYouTubeVideo(videoId) {
             captionBtn.title = 'Phụ đề / Phụ đề chi tiết (Phím C)';
         }
         showCaptionLoading();
-
-        // 🎵 Load audio tracks for new video
-        loadAvailableAudioTracks(videoId);
         
         // Update video title for new video
         setTimeout(() => {
@@ -3269,16 +2901,10 @@ function onPlayerReady(event) {
     } catch (e) {}
 
     // 🎮 Load available captions/subtitles
+    // YouTube needs time to load caption tracks
     setTimeout(() => {
         loadAvailableCaptions();
     }, 1200);
-
-    // 🎵 Load available audio tracks if not loaded yet
-    setTimeout(() => {
-        if (availableAudioTracks.length <= 1 && currentLoadedVideoId) {
-            loadAvailableAudioTracks(currentLoadedVideoId);
-        }
-    }, 1500);
     
     // 🎮 Retry loading captions for videos that load captions late
     setTimeout(() => {
@@ -3314,9 +2940,6 @@ function updateVideoTitle() {
 // Player state change callback
 function onPlayerStateChange(event) {
     if (!isPlayerReady) return;
-
-    // 🎵 Synchronize custom audio track with player state
-    syncCustomAudioWithPlayer(event.data, player.getCurrentTime());
     
     // ✅ Use new sync controller if available
     if (videoSyncController) {

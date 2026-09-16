@@ -8,10 +8,6 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - YOUTUBE_COOKIES_TEXT=${YOUTUBE_COOKIES_TEXT:-}
-      - YOUTUBE_COOKIES_BASE64=${YOUTUBE_COOKIES_BASE64:-}
-      - YOUTUBE_COOKIES_FILE=${YOUTUBE_COOKIES_FILE:-}
-
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "healthcheck.js"]
