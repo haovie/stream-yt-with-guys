@@ -127,3 +127,10 @@ build/Release
 ehthumbs.db
 Thumbs.db
 .vercel
+
+# YouTube cookies
+cookies.txt
+yt_session_cookies.txt
+*.cookie
+youtube_cookies_base64.txt
+youtube_cookies.txt 
